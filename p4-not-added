@@ -6,7 +6,7 @@ exec ${PERL-perl} -wSx $0 ${1+"$@"}
 # Created: 2000-03-10
 # Public domain.
 
-# $Id: p4-not-added,v 1.3 2002/09/22 10:07:55 friedman Exp $
+# $Id: p4-not-added,v 1.4 2002/09/22 10:23:57 friedman Exp $
 
 # Commentary:
 
@@ -43,13 +43,18 @@ sub diag
   my $tm = POSIX::strftime ("%H:%M:%S", localtime(time));
 
   my @args;
+  my $len = 1 + length $tm; # $tm + " "
   for my $arg (@_)
     {
       my $new = (ref $arg eq 'CODE') ? &$arg : $arg;
-      $new = $self->printobj ($new) if (ref $new);
-      push @args, $new if (defined $new);
+      $new = $self->printobj ($new, $len) if (ref $new);
+      if (defined $new)
+        {
+          push @args, $new;
+          $len += length $new;
+        }
     }
-  print STDERR "$tm ", @args, "\n" if @args;
+  print STDERR $tm, " ", @args, "\n" if @args;
 }
 
 sub debug
@@ -62,7 +67,7 @@ sub p4cmd
 {
   my ($self, $cmd) = @_;
 
-  $self->debug ("(p4cmd) Executing command \"p4 $cmd\"");
+  $self->debug ("(p4cmd) Executing command \"p4 ", $cmd, "\"");
 
   local %ENV = %ENV;  # make copy
   for my $p4env (qw(P4USER P4CLIENT P4PORT))
@@ -101,7 +106,7 @@ sub expand_file_name ($;$)
   # something not equivalent to `/'.
   #s|^/\.\./|/|o     while (m|^/\.\./|o);
 
-  $self->debug ("(expand_file_name) $basename -> $_");
+  $self->debug ("(expand_file_name) ", $basename, " -> ", $_);
 
   return $_;
 }
@@ -115,8 +120,6 @@ sub parse_client
   my $self = shift;
   my (@viewline, @searchdirs);
   my $current_field = "";
-
-  $self->debug ("(parse_client)");
 
   my $fh = $self->p4cmd ("client -o");
   while (<$fh>)
@@ -143,6 +146,7 @@ sub parse_client
   my @vmap;
   my $client = $self->{client};
   my $root   = $self->{root};
+  $root = "" if ($root eq "/");
   for my $view (@viewline)
     {
       $view =~ s/^\s*(.*?)\s*\r?\n/$1/o;
@@ -159,7 +163,8 @@ sub parse_client
         {
           # Strip trailing slash from the search directories so that
           # concatenation in add_localfiles will work properly.
-          (my $dir = $local) =~ s=/$==o;
+          my $dir = $local;
+          $dir =~ s=/$==o unless $dir eq "/";
           push @searchdirs, $dir;
         }
       push @vmap, [$depot, $local];
@@ -208,6 +213,7 @@ sub add_localfiles
 
   for my $ent (@files)
     {
+      $dir = "" if ($dir eq "/");
       my $file = join ("/", $dir, $ent);
       my @stat = lstat ($file);
       unless (@stat)
@@ -227,6 +233,7 @@ sub add_localfiles
           $self->{localfiles}->{$file} = 1;
         }
     }
+
   $self->{localfiles};
 }
 
@@ -237,8 +244,16 @@ sub localfiles
 
   for my $dir (@{$self->searchdirs ()})
     {
-      (my $searchdirs = $dir) =~ s=/$==o;  # modify copy only
-      $self->add_localfiles ($searchdirs);
+      if ($dir eq "/" && !$self->{searchdirs_restricted})
+        {
+          $self->diag ("WARNING: client view includes root directory (\"/\")");
+          $self->diag ("WARNING: not searching / unless specified on command line");
+          next;
+        }
+
+      my $sdir = $dir; # modify copy only
+      $sdir =~ s=/$==o unless ($sdir eq "/");
+      $self->add_localfiles ($sdir);
     }
 
   $self->debug
@@ -407,7 +422,7 @@ sub filter_p4_controlled
     if (exists $self->{filtered_localfiles});
 
   my $localfiles = $self->localfiles ();
-  return undef unless $localfiles;
+  return undef unless $localfiles && %$localfiles;
   my %files = %$localfiles;
   for my $added (@{$self->have ()}, @{$self->opened ()})
     {
@@ -434,13 +449,13 @@ sub printobj
       if (defined $indent)
         {
           $lis = ",\n" . (" " x $indent);
-          $indent += 2;
+          $indent += 1;
           $is =  ",\n" . (" " x $indent);
         }
 
-      return ("[ "
+      return ("["
               . join ($is, map { $self->printobj ($_, $indent) } @$obj)
-              . " ]");
+              . "]");
     }
   elsif ($ref eq 'HASH')
     {
