@@ -1,57 +1,34 @@
 #!/bin/sh
+# $Id: cvs-add-recursive,v 1.1 1998/02/06 04:46:23 friedman Exp $
 
-# $Id$
+exec ${PERL-perl} -Sx $0 ${1+"$@"}
+#!perl   [perl will skip all lines in this file before this line]
 
-exec ${PERL-perl} - ${1+"$@"} <<'__EOF__'
-
-&main ();
-
-sub main
+sub grind_over_cvs_tree ($$)
 {
-  foreach $arg (@ARGV)
-    {
-      &grind_over_tree ($arg, "doit");
-    }
-}
-
-sub doit
-{
-  local ($files) = join ("\n", @_);
-
-  system("cvs add $files");
-}
-
-sub grind_over_tree
-{
-  local ($dir, $action) = @_;
-  local (@files);
+  my ($dir, $fn) = @_;
 
   return if (! -d $dir);
   return if (-d "$dir/CVS"); # Skip dirs already in CVS
-
-  if (! chdir ($dir))
-    {
-      print STDERR "chdir: $dir: $!\n";
-      return;
-    }
-
-  if (! opendir (DIRHNDL, "."))
-    {
-      print STDERR "opendir: $dir: $!\n";
-      return;
-    }
-
-  @files = grep (!/^\.\.?$/, readdir (DIRHNDL));
-  close (DIRHNDL);
-
-  &$action (@files);
-  foreach $ent (@files)
-    {
-      &grind_over_tree ("$ent", $action);
-    }
+  return print STDERR "chdir: $dir: $!\n" unless (chdir ($dir));
+  return print STDERR "opendir: $dir: $!\n" unless (opendir (D, "."));
+  my @files = grep (!/^\.\.?$/, readdir (D));
+  closedir (D);
+  &$fn (@files);
+  for my $ent (@files) { grind_over_cvs_tree ($ent, $fn); }
   chdir ("..");
 }
 
-__EOF__
+{
+  for my $ent (@ARGV)
+    {
+      grind_over_cvs_tree ($ent, sub { system ("cvs", "add", @_); });
+    }
+}
+
+# local variables:
+# mode: perl
+# eval: (auto-fill-mode 1)
+# end:
 
 # cvs-add-recursive ends here
