@@ -1,0 +1,299 @@
+#!/bin/sh
+exec ${PERL-perl} -wSx $0 ${1+"$@"}
+#!perl
+
+# cvs-proxy --- forward cvs connections through ssh proxies
+
+# Copyright (C) 2004 Noah S. Friedman
+
+# Author: Noah Friedman <friedman@splode.com>
+# Created: 2004-02-29
+
+# $Id$
+
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2, or (at your option)
+# any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, you can either send email to this
+# program's maintainer or write to: The Free Software Foundation,
+# Inc.; 59 Temple Place, Suite 330; Boston, MA 02111-1307, USA.
+
+# Commentary:
+# Code:
+
+use Getopt::Long;
+use Symbol;
+use strict;
+
+sub err
+{
+  (my $progname = $0) =~ s=^.*/==;
+  my $msg = join (": ", $progname, @_);
+  print STDERR $msg, (substr ($msg, -1, 1) eq "\n"? "" : "\n");
+  return undef;
+}
+
+sub xopen
+{
+  my $file = shift;
+  my $fh = gensym;
+
+  unless (open ($fh, $file, @_))
+    {
+      err ("open", $file, $!);
+      exit (1);
+    }
+  return $fh;
+}
+
+sub proxy_listener_p
+{
+  my $port = shift;
+
+  local $_ = `netstat -an`;
+  return 1 if /(?:127|0)\.0\.0\.[01]:$port .*LISTEN/;
+  return 0;
+}
+
+sub _mkpipe
+{
+  # Make sure the fds opened here will persist across exec.
+  # The Perl manual says "The close-on-exec status of a file descriptor
+  # will be decided according to the value of $^F when the corresponding
+  # file, pipe, or socket was opened, not the time of the exec()."
+  local $^F = 2**16;
+  my ($rh, $wh) = (gensym, gensym);
+  pipe ($rh, $wh);
+  return ($rh, $wh);
+}
+
+sub fd_filename
+{
+  my $fh = shift;
+  my $fd = fileno ($fh);
+  my @fdstat = stat ($fh);
+
+  for my $dir (qw(/proc/self/fd /dev/fd))
+    {
+      my $name = sprintf ("%s/%d", $dir, $fd);
+      my @nstat = stat ($name);
+
+      next unless (@nstat
+                   && $nstat[0] == $fdstat[0]   # dev
+                   && $nstat[6] == $fdstat[6]   # rdev
+                   && $nstat[1] == $fdstat[1]); # ino
+
+      return $name;
+    }
+
+  err ("Cannot find device path for file descriptor $fd");
+  exit (1);
+}
+
+
+sub get_cvsroot
+{
+  if (-f "CVS/Root")
+    {
+      my $fh = xopen ("CVS/Root");
+      my $root = <$fh>;
+      close $fh;
+      return $root;
+    }
+
+  return $ENV{CVSROOT} if defined $ENV{CVSROOT};
+
+  err ("Cannot determine CVSROOT");
+  exit (1);
+}
+
+sub get_cvspass
+{
+  my $cvsroot = shift;
+
+  my $passfile;
+  for my $try ($ENV{CVS_PASSFILE}, $ENV{HOME} . "/.cvspass")
+    {
+      if (defined $try && -f $try)
+        {
+          $passfile = $try;
+          last;
+        }
+    }
+  unless (defined $passfile)
+    {
+      err ("Cannot find any cvs pserver passwd file (e.g. ~/.cvspass)");
+      exit (1);
+    }
+
+  my $fh = xopen ($passfile);
+  local $_ = join ("", <$fh>);
+  close ($fh);
+
+  return $1 if (m=^(?:|/\d+ +)$cvsroot (.*)$=m);
+  err ("Cannot find cvspass entry for $cvsroot in $passfile");
+  exit (1);
+}
+
+sub cvs
+{
+  my $opt = shift;
+
+  unless ($opt->{cvsroot} =~ /^:([^:]+):(?:([^@]+)@)?([^:]+):([^:]+:)?(.*)/
+          && exists { ext => 1, server => 1, pserver => 1 }->{$1})
+    {
+      err ($opt->{cvsroot},
+           "CVSROOT cannot be proxied, or is unknown format");
+      exit (1);
+    }
+  my ($method, $user, $host, $port, $dir) = ($1, $2, $3, $4, $5);
+
+  # We may not need these, but if we do they have to remain in scope for exec.
+  my ($rh, $wh);
+
+  # If using a proxy, then create a temporary proxy configuration via a
+  # piped filehandle that can be referenced via a /dev/fd or similar
+  # mechanism.
+  # Depending on the actual method used, the data in this pipe might vary.
+  # For a pserver proxy, stuff a .cvspass entry into it.
+  # For an ssh proxy, stuff an ssh configuration into it to handle host
+  # keys and redirection properly.
+  if (proxy_listener_p ($opt->{proxy_port}))
+    {
+      ($rh, $wh) = _mkpipe ();
+      my $infile = fd_filename ($rh);
+
+      if ($method eq "pserver")
+        {
+          my $pass = get_cvspass ($opt->{cvsroot});
+          my $cvsroot = sprintf (":pserver:%s%s:%d:%s",
+                                 ($user ? $user . '@' : ''),
+                                 "localhost", $opt->{proxy_port}, $dir);
+          printf ($wh "/1 %s %s\n", $cvsroot, $pass);
+
+          # Avoid clobbering CVS/Root in older cvs versions, though perhaps
+          # this is needless paranoia since older versions didn't let you
+          # specify a port anyway.
+          $ENV{CVS_IGNORE_REMOTE_ROOT} = 't';
+          $ENV{CVS_PASSFILE} = $infile;
+          unshift @_, ("-d", $cvsroot);
+        }
+      else  # server style
+        {
+          printf ($wh "Host %s\n", $host);
+          map { printf ($wh "  %-15s %s\n", @$_) if $_ }
+            (['HostKeyAlias',  $host],
+             # We really should not disable host key checking here.
+             # Use a hostkeyalias instead.
+             #['NoHostAuthenticationForLocalhost', 'yes'],
+             ['Hostname',      'localhost'],
+             ['BatchMode',     'yes'],
+             ['Compression',   'no'],
+             ['EscapeChar',    'none'],
+             ['ForwardAgent',  'no'],
+             ['ForwardX11',    'no'],
+             ['Port',          $opt->{proxy_port}],
+             (defined $user ? ['User', $user] : undef),
+             (map { ['IdentityFile', $_] } @{$opt->{ssh_identity}}),
+             (map { [split(/\s+|=/, $_, 2)] } @{$opt->{ssh_option}}),
+            );
+
+          # Prepare for cvs to invoke this script again as the rexec agent.
+          # We pass along the state we need in environment variables.
+          $ENV{CVSPROXY_SSH_CONFIG} = $infile;
+          $ENV{CVS_RSH} = $0;
+        }
+      close ($wh);
+    }
+
+  my $cvs = $ENV{CVS} || "cvs";
+  exec ($cvs, @_) || die "exec: $cvs: $!";
+}
+
+sub ssh
+{
+  my $config = $ENV{CVSPROXY_SSH_CONFIG};
+  delete $ENV{CVSPROXY_SSH_CONFIG};
+  my $ssh = $ENV{SSH} || "ssh";
+  exec ($ssh, "-F", $config, @_) || die "exec: $ssh: $!";
+}
+
+
+sub parse_options
+{
+  my %opt;
+
+  Getopt::Long::config ('bundling', 'autoabbrev');
+  GetOptions ("d|cvsroot=s",               \$opt{cvsroot},
+
+              "p|proxy-port=i",            \$opt{proxy_port},
+
+              "o|ssh-option=s@",           \$opt{ssh_option},
+              "i|ssh-identity=s@",         \$opt{ssh_identity},
+
+              # ignored; passed by cvs to $CVS_RSH
+              "l=s",                       \$opt{user},
+
+              "h|help",                    \&usage);
+  return \%opt;
+}
+
+sub usage ()
+{
+  $0 =~ s|.*/||;
+  print "Usage: $0 {options} [files {...}]\n
+Options:
+    -d, --cvsroot=ROOT
+        Specify the canonical cvsroot that should be used for this
+        connection.  This option is rarely needed since the value is taken
+        from the CVS/Root administrative file in the current directory or
+        the value of the CVSROOT environment variable, but if neither of
+        these is available (e.g. when doing a first-time checkout), this
+        option can be specified.
+
+        Note that doing an initial checkout on a :pserver: protocol
+        connection will probably not leave the CVS/Root files properly set
+        with the canonical value.  (This is a bug that needs to be fixed.)
+
+    -p, --proxy-port=PORT
+        Check localhost port PORT to see if a proxy is listening.
+
+    -o, --ssh-option=OPT
+        Pass long option OPT to ssh when connecting.
+        Syntax of OPT is e.g. \"Protocol 2\" or \"Protocol=2\".
+        This option can be specified multiple times.
+
+    -i, --ssh-identity=IDENT
+        Provide IDENT, a file name, as an available private key for RSA/DSA
+        authentication.  This option can be specified multiple times.
+
+    -h, --help
+        You're looking at it.\n";
+  exit (1);
+}
+
+sub main
+{
+  my $opt = parse_options ();
+  $opt->{cvsroot} ||= get_cvsroot ();
+
+  ssh (@ARGV) if (defined $ENV{CVSPROXY_SSH_CONFIG}); # no return
+  cvs ($opt, @ARGV);
+}
+
+main ();
+
+# local variables:
+# mode: perl
+# eval: (auto-fill-mode 1)
+# end:
+
+# cvs-proxy ends here
