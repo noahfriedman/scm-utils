@@ -1,0 +1,57 @@
+#!/bin/sh
+
+# $Id$
+
+exec ${PERL-perl} - ${1+"$@"} <<'__EOF__'
+
+&main ();
+
+sub main
+{
+  foreach $arg (@ARGV)
+    {
+      &grind_over_tree ($arg, "doit");
+    }
+}
+
+sub doit
+{
+  local ($files) = join ("\n", @_);
+
+  system("cvs add $files");
+}
+
+sub grind_over_tree
+{
+  local ($dir, $action) = @_;
+  local (@files);
+
+  return if (! -d $dir);
+  return if (-d "$dir/CVS"); # Skip dirs already in CVS
+
+  if (! chdir ($dir))
+    {
+      print STDERR "chdir: $dir: $!\n";
+      return;
+    }
+
+  if (! opendir (DIRHNDL, "."))
+    {
+      print STDERR "opendir: $dir: $!\n";
+      return;
+    }
+
+  @files = grep (!/^\.\.?$/, readdir (DIRHNDL));
+  close (DIRHNDL);
+
+  &$action (@files);
+  foreach $ent (@files)
+    {
+      &grind_over_tree ("$ent", $action);
+    }
+  chdir ("..");
+}
+
+__EOF__
+
+# cvs-add-recursive ends here
