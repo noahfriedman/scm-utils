@@ -4,11 +4,11 @@
 # Author: Noah Friedman <friedman@splode.com>
 # Created: 1997-08-20
 
-# $Id$
+# $Id: cvs-fix-rep-perm,v 1.1 1997/09/03 23:05:25 friedman Exp $
 
 # Commentary:
 
-# If you want to use this script in the backend to CVS so that files
+# If you want to use this script in the backend to CVS so that file
 # permissions are automatically corrected when changes are committed,
 # Add a line like the following to $CVSROOT/CVSROOT/loginfo:
 #
@@ -225,7 +225,7 @@ sub main
 
 # Parse args of the form: module file file file ...
 # where module is relative to the cvs root, and each file is a name
-# (probably sans `,v' suffix or Attic reference).
+# (probably sans `,v' suffix or Attic reference) relative to the module.
 # Return a list with the same relative module name followed by
 # corresponding file names that actually exist in the repository.
 #
@@ -301,7 +301,7 @@ sub parse_loginfo_args
           &my_chdir ("$cvsroot/$module");
         }
     }
-  &popdir () if defined ($module);
+  &popdir ();
   return @args;
 }
 
