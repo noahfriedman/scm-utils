@@ -4,7 +4,7 @@
 # Author: Noah Friedman <friedman@splode.com>
 # Created: 1997-08-20
 
-# $Id: cvs-fix-rep-perm,v 1.1 1997/09/03 23:05:25 friedman Exp $
+# $Id: cvs-fix-rep-perm,v 1.2 1997/09/04 23:03:47 friedman Exp $
 
 # Commentary:
 
@@ -188,12 +188,33 @@ done
 
 case "$debug" in -d ) set -x ;; esac
 
-exec $perl $debug - ${1+"$@"} <<'__EOF__'
+# Sigh.  If we happen to be running setuid, perl refuses to read scripts
+# from stdin, so use a tempfile instead.  What a waste, and all in the same
+# of "security".
+CFRP_SCRIPTFILE="${TMPDIR-/tmp}/$progname$$"
+export CFRP_SCRIPTFILE
 
-&main (@ARGV);
+trap 'exitstat=$?
+    rm -f "$CFRP_SCRIPTFILE"
+    trap "" 0 1 2 3 15
+    exit $exitstat
+   ' 0 1 2 3 15
+
+cat > "$CFRP_SCRIPTFILE" <<'__EOF__'
+
+&main (&untaint (@ARGV));
 
 sub main
 {
+  &untaint_env ();
+
+  # Delete the temporary scriptfile, as a way of cleaning up after the
+  # shell invocation.
+  {
+    local ($file) = &getenv ('CFRP_SCRIPTFILE');
+    unlink ($file) if (defined ($file));
+  }
+
   &disable_stdio_buffering (STDOUT, STDERR);
 
   $group      =      &getenv ("CFRP_GROUP");
@@ -468,9 +489,7 @@ sub popdir
 
 sub getenv
 {
-  local ($x) = $ENV{$_[0]};
-  return $x if (defined ($x) && $x ne '');
-  return undef;
+  return $ENV{$_[0]};
 }
 
 sub putenv
@@ -505,6 +524,32 @@ sub disable_stdio_buffering
     }
 }
 
+# This "untaints" any values which may be suspect.
+# This only matters when running setuid.
+sub untaint
+{
+  local (@y);
+
+  foreach $z (@_)
+    {
+      $z =~ /^(.*)$/;
+      push (@y, $1);        # $1 is always untainted
+    }
+  return @y;
+}
+
+sub untaint_env
+{
+  foreach $v (keys (%ENV))
+    {
+      ($ENV{$v}) = &untaint ($ENV{$v});
+    }
+}
+
 __EOF__
+
+case $? in
+  0 ) exec $perl $debug "$CFRP_SCRIPTFILE" ${1+"$@"} ;;
+esac
 
 # cvs-fix-rep-perm ends here
