@@ -1,26 +1,109 @@
 #! /bin/sh
-# $Id: nuke-stale-cvs-data,v 1.2 1997/03/31 18:24:46 friedman Exp $
+# nuke-stale-cvs-data --- clean up after cvs server
+
+# Author: Noah Friedman <friedman@splode.com>
+# Created: 1997-01-29
+# Public domain.
+
+# $Id: nuke-stale-cvs-data,v 1.3 1997/04/28 17:34:50 friedman Exp $
+
+# Commentary:
 
 # Looks for /tmp/cvs-serv* data left from CVS server processes which exited
-# without reaping those temporary files.  This script works on Solaris 2,
-# Irix 5, and Irix 6.  Your mileage may vary on other systems.
+# without reaping those temporary files.
+#
+# Requires a SVR4 style `ps' command.
 
-case "$1" in
-  -f ) force=t; shift;;
-  *  ) force=nil ;;
-esac
+# Code:
 
-case "$1" in
-  -q ) quick=t ; shift;;
-  *  ) force=nil ;;
-esac
+# Name by which this script was invoked.
+progname=`echo "$0" | sed -e 's/[^\/]*\///g'`
 
+# To prevent hairy quoting and escaping later.
+bq='`'
+eq="'"
+
+usage="Usage: $progname {options}
+
+Options are:
+-D, --debug                  Turn on shell debugging ($bq${bq}set -x$eq$eq).
+-h, --help                   You're looking at it.
+-f, --force                  Do not query before removing stale data.
+-q, --quick                  Do not summarize data sizes, which can be slow.
+"
+
+# Initialize variables.
+# Don't use `unset' since old bourne shells don't have this command.
+# Instead, assign them an empty value.
+debug=
+force=
+quick=
+
+# Parse command line arguments.
+# Make sure that all wildcarded options are long enough to be unambiguous.
+# It's a good idea to document the full long option name in each case.
+# Long options which take arguments will need a `*' appended to the
+# canonical name to match the value appended after the `=' character.
+while : ; do
+  case $# in 0) break ;; esac
+  case "$1" in
+    -D | --debug | --d* )
+      debug=t
+      shift
+     ;;
+    -h | --help | --h* )
+      echo "$usage" 1>&2
+      exit 0
+     ;;
+    -f | --force | --f* )
+      force=t
+      shift
+     ;;
+    -q | --quick | --q* )
+      quick=t
+      shift
+     ;;
+    -- )     # Stop option processing
+      shift
+      break
+     ;;
+    -? | --* )
+      case "$1" in
+        --*=* ) arg=`echo "$1" | sed -e 's/=.*//'` ;;
+        * )     arg="$1" ;;
+      esac
+      exec 1>&2
+      echo "$progname: unknown or ambiguous option $bq$arg$eq"
+      echo "$progname: Use $bq--help$eq for a list of options."
+      exit 1
+     ;;
+    -??* )
+      # Split grouped single options into separate args and try again
+      optarg="$1"
+      shift
+      set fnord `echo "x$optarg" | sed -e 's/^x-//;s/\(.\)/-\1 /g'` ${1+"$@"}
+      shift
+     ;;
+    * )
+      break
+     ;;
+  esac
+done
+
+case "$debug" in t ) set -x ;; esac
 
 PATH="/bin:$PATH"
+export PATH
 
 prefix=/tmp/cvs-serv
 
-for pid in `ls -1d ${prefix}* 2> /dev/null | sed "s=$prefix=="`; do
+foo=`echo -n test`
+case "$foo" in
+  "-n test" ) n=   c='\c' ;;
+  * )         n=-n c=     ;;
+esac
+
+for pid in `ls -1d ${prefix}* 2> /dev/null | sed -e "s=$prefix=="`; do
   dir="$prefix$pid"
 
   if ps -p $pid > /dev/null; then
@@ -29,13 +112,13 @@ for pid in `ls -1d ${prefix}* 2> /dev/null | sed "s=$prefix=="`; do
 
   test -d "$dir" || continue
 
-  echo "Stale CVS data directory: \c"
+  echo $n "Stale CVS data directory: $c"
   {
     if test "$quick" = "t" ; then
-      echo "?? \c"
+      echo $n "?? $c"
     else
-      blocks=`du -sk "$dir" | sed 's/[^0-9].*//'`
-      echo "$blocks \c"
+      blocks=`du -sk "$dir" | sed -e 's/[^0-9].*//'`
+      echo $n "$blocks $c"
     fi
     ls -l1d "$dir"
   } | awk '{ print  $4, $1 "k", $7, $8, $9, $10 }'
@@ -43,7 +126,7 @@ for pid in `ls -1d ${prefix}* 2> /dev/null | sed "s=$prefix=="`; do
   case "$force" in
     t ) rm -rf "$prefix$pid" ;;
     * )
-      echo "Delete recursively (y/n)? \c"
+      echo $n "Delete recursively (y/n)? $c"
       read ans
 
       case "$ans" in
@@ -57,4 +140,4 @@ for pid in `ls -1d ${prefix}* 2> /dev/null | sed "s=$prefix=="`; do
   esac
 done
 
-# eof
+# nuke-stale-cvs-data ends here
