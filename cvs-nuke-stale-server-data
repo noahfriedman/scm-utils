@@ -1,0 +1,41 @@
+#! /bin/sh
+# $Id$
+
+# Looks for /tmp/cvs-serv* data left from CVS server processes which exited
+# without reaping those temporary files.  This script works on Solaris 2,
+# Irix 5, and Irix 6.  Your mileage may vary on other systems.
+
+
+PATH="/bin:$PATH"
+
+prefix=/tmp/cvs-serv
+
+for pid in `ls -1d ${prefix}* 2> /dev/null | sed "s=$prefix=="`; do
+  dir="$prefix$pid"
+
+  if ps -p $pid > /dev/null; then
+    continue
+  fi
+
+  test -d "$dir" || continue
+
+  echo "Stale CVS data directory: \c"
+  {
+    blocks=`du -sk "$dir" | sed 's/[^0-9].*//'`
+    echo "$blocks \c"
+    ls -l1d "$dir"
+  } | awk '{ print  $4, $1 "k", $7, $8, $9, $10 }'
+  echo "Delete recursively (y/n)? \c"
+  read ans
+
+  case "$ans" in
+    y* | Y* )
+      echo rm -rf "$prefix$pid"
+      rm -rf "$prefix$pid"
+     ;;
+  esac
+
+  echo
+done
+
+# eof
