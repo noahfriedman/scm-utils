@@ -1,0 +1,14 @@
+#!/bin/sh
+# $Id$
+
+# Print a list of unique symbolic tags for the CVS files traversed.
+
+cvs -q log -h "$@" \
+ | sed -n -e '/symbolic names:/!d' \
+          -e ':l' \
+          -e 'n' \
+          -e '/^[ 	]/{' \
+          -e '  s/:.*//;s/^[ 	]*//p' \
+          -e '}' \
+          -e 't l' \
+  | sort -u
