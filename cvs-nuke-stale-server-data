@@ -1,12 +1,17 @@
 #! /bin/sh
-# $Id: nuke-stale-cvs-data,v 1.1 1997/01/29 23:21:42 friedman Exp $
+# $Id: nuke-stale-cvs-data,v 1.2 1997/03/31 18:24:46 friedman Exp $
 
 # Looks for /tmp/cvs-serv* data left from CVS server processes which exited
 # without reaping those temporary files.  This script works on Solaris 2,
 # Irix 5, and Irix 6.  Your mileage may vary on other systems.
 
 case "$1" in
-  -f ) force=t ;;
+  -f ) force=t; shift;;
+  *  ) force=nil ;;
+esac
+
+case "$1" in
+  -q ) quick=t ; shift;;
   *  ) force=nil ;;
 esac
 
@@ -26,8 +31,12 @@ for pid in `ls -1d ${prefix}* 2> /dev/null | sed "s=$prefix=="`; do
 
   echo "Stale CVS data directory: \c"
   {
-    blocks=`du -sk "$dir" | sed 's/[^0-9].*//'`
-    echo "$blocks \c"
+    if test "$quick" = "t" ; then
+      echo "?? \c"
+    else
+      blocks=`du -sk "$dir" | sed 's/[^0-9].*//'`
+      echo "$blocks \c"
+    fi
     ls -l1d "$dir"
   } | awk '{ print  $4, $1 "k", $7, $8, $9, $10 }'
 
