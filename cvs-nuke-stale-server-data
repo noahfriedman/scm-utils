@@ -5,14 +5,14 @@
 # Created: 1997-01-29
 # Public domain.
 
-# $Id: nuke-stale-cvs-data,v 1.3 1997/04/28 17:34:50 friedman Exp $
+# $Id: nuke-stale-cvs-data,v 1.4 1998/03/18 22:50:12 friedman Exp $
 
 # Commentary:
 
 # Looks for /tmp/cvs-serv* data left from CVS server processes which exited
 # without reaping those temporary files.
 #
-# Requires a SVR4 style `ps' command.
+# Requires a SVR4 style `ps' command or /proc filesystem.
 
 # Code:
 
@@ -106,7 +106,11 @@ esac
 for pid in `ls -1d ${prefix}* 2> /dev/null | sed -e "s=$prefix=="`; do
   dir="$prefix$pid"
 
-  if ps -p $pid > /dev/null; then
+  if [ -d /proc ]; then
+    if ls -d /proc/$pid > /dev/null 2>&1 ; then
+     continue
+    fi
+  elif ps -p $pid > /dev/null; then
     continue
   fi
 
@@ -120,7 +124,7 @@ for pid in `ls -1d ${prefix}* 2> /dev/null | sed -e "s=$prefix=="`; do
       blocks=`du -sk "$dir" | sed -e 's/[^0-9].*//'`
       echo $n "$blocks $c"
     fi
-    ls -l1d "$dir"
+    ls -ld "$dir"
   } | awk '{ print  $4, $1 "k", $7, $8, $9, $10 }'
 
   case "$force" in
