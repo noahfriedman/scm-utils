@@ -1,0 +1,143 @@
+#!/usr/local/gnubin/perl -w
+##
+## -*-perl-*-
+##
+#These are the options:
+#	rcslocks		-- report locks in this & all subdirs
+#	rcslocks a b c		-- report locsk for files a, b and c
+#	rcslocks -me		-- show only my locks
+#	rcslocks -ci		-- generate a 'ci' command line of all
+#				   my locked files
+#	rcslocks -v		-- verbosity
+#
+##
+## Setup check stuff
+##
+@CILIST=();
+$login = getlogin || (getpwuid($<))[0] || "Somebody";
+
+$doCI = 0;
+$doMe = 0;
+$doVerbose = 0;
+
+##
+## Scan for args, skip over files/directories
+##
+@FILES=();
+for $d (@ARGV) {
+    if ( $d eq "-ci") {
+	$doCI = 1;
+    } elsif ( $d eq "-me") {
+	$doMe = 1;
+    } elsif ( $d eq "-v") {
+	$doVerbose = 1;
+    } else {
+	push(@FILES, $d);
+    }
+}
+
+##
+## Handle default
+##
+if ( @FILES < 1 ) {
+    do processDirectory(".");
+} else {
+    foreach $file (@FILES) {
+	do processDirectory($file);
+    }
+}
+if ( $doCI ) {
+    print "Printing our lock command args for your files\n\n";
+    print "ci @CILIST\n";
+}
+	
+#############################################################################
+## Process a directory
+#############################################################################
+sub processDirectory {
+    local($dir) = @_;
+    local(@FILES,$f,$d);
+    
+    ##
+    ## If it's a directory, scan the RCS directory
+    ##
+    if ( -d $dir ) {
+	if ( !opendir(DIR,$dir) ) {
+	    print ("Can not open directory $dir\n");
+	} else {
+	    @FILES=readdir(DIR);
+	    closedir(DIR);
+	}
+    } else {
+	@FILES = ($dir);
+	$dir = ".";
+    }
+    
+  file:
+    for $f (@FILES) {
+	##
+	## Make it be a proper RCS file...
+	##
+	$d = $dir . "/" . $f;
+	$doVerbose && print "Consider $d\n";
+	if ( -d $d ) {
+	    if ( $f ne "." && $f ne ".." && $f ne "RCS") {
+		do processDirectory($d); 
+	    }
+	    
+	} elsif ( -r $d ) {
+	    if ( $f =~ /.*,v/ ) {
+		$file = $d;
+		$rcsfile = $d;
+	    } else {	
+		$file = $d . ",v";
+		$rcsfile = "$dir/RCS/$f,v";
+	    }
+	    
+	    ##
+	    ## Look for it in ./ and in ./RCS
+	    ##
+	    if ( ! (-f $file || -f $rcsfile ) ) {
+		next file;
+	    }
+	    if ( ! open (FILE, $file) ) {
+		if ( ! open (FILE, $rcsfile) ) {
+		    print ("Can not open $d\n");
+		    next file;
+		}
+	    }
+	  line:
+	    while (<FILE>) {
+		if ( /^locks$/ ) {
+		    $_ = <FILE>;
+		    if (/^\s*(\S+):([0-9\.]+)/) {
+			if ( $doCI && $1 eq $login ) {
+			    ($c = $file) =~ s/,v//;
+			    push(CILIST, $c);
+			} elsif (!$doMe || ( $doMe && $1 eq $login) ) {
+			    print "$d: revision $2 locked by $1\n";
+			}
+			last line;
+		    }
+		} elsif ( /^locks/ ) {
+		    if (/^locks\s*(\S+):([0-9\.]+)/) {
+			if ( $doCI && $1 eq $login ) {
+			    ($c = $file) =~ s/,v//;
+			    push(CILIST, $c);
+			} elsif (!$doMe || ( $doMe && $1 eq $login) ) {
+			    print "$d: revision $2 locked by $1\n";
+			}
+			last line;
+		    }
+		}
+		if ( /^\@\@/ ) {
+		    last line;
+		}
+	    }
+	    close FILE;
+	}
+    }
+}
+
+
+
