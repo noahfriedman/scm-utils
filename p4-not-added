@@ -6,7 +6,7 @@ exec ${PERL-perl} -wSx $0 ${1+"$@"}
 # Created: 2000-03-10
 # Public domain.
 
-# $Id$
+# $Id: p4-not-added,v 1.3 2002/09/22 10:07:55 friedman Exp $
 
 # Commentary:
 
@@ -158,7 +158,7 @@ sub parse_client
       if ($local =~ m=/$=o)
         {
           # Strip trailing slash from the search directories so that
-          # concatenation in files_list will work properly.
+          # concatenation in add_localfiles will work properly.
           (my $dir = $local) =~ s=/$==o;
           push @searchdirs, $dir;
         }
@@ -185,9 +185,9 @@ sub _client_attr
   return $self->{$attr};
 }
 
-sub client    { $_[0]->_client_attr ('client') }
-sub root      { $_[0]->_client_attr ('root') }
-sub view      { $_[0]->_client_attr ('view') }
+sub client     { $_[0]->_client_attr ('client') }
+sub root       { $_[0]->_client_attr ('root') }
+sub view       { $_[0]->_client_attr ('view') }
 sub searchdirs { $_[0]->_client_attr ('searchdirs') }
 
 # Build a list of all regular files in and below the directory specified as
@@ -210,7 +210,11 @@ sub add_localfiles
     {
       my $file = join ("/", $dir, $ent);
       my @stat = lstat ($file);
-      $self->diag ("stat: $file: $!") unless @stat;
+      unless (@stat)
+        {
+          $self->diag ("stat: $file: $!");
+          next;
+        }
 
       # "_" reuses struct from previous stat call
       next if (-l _); # Do not traverse symlinks
@@ -294,9 +298,6 @@ sub opened
   return $self->{opened} if (exists $self->{opened});
 
   my $view = $self->view;
-
-  my @opened;
-
   my $opencmd = "opened";
   if ($self->{searchdirs_restricted})
     {
@@ -306,6 +307,7 @@ sub opened
   # Supress stderr because if there are no opened files,
   # a warning is printed.
   my $fh = $self->p4cmd ($opencmd . " 2>/dev/null");
+  my @opened;
   while (<$fh>)
     {
       chop;
