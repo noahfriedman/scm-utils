@@ -1,9 +1,14 @@
 #! /bin/sh
-# $Id$
+# $Id: nuke-stale-cvs-data,v 1.1 1997/01/29 23:21:42 friedman Exp $
 
 # Looks for /tmp/cvs-serv* data left from CVS server processes which exited
 # without reaping those temporary files.  This script works on Solaris 2,
 # Irix 5, and Irix 6.  Your mileage may vary on other systems.
+
+case "$1" in
+  -f ) force=t ;;
+  *  ) force=nil ;;
+esac
 
 
 PATH="/bin:$PATH"
@@ -25,17 +30,22 @@ for pid in `ls -1d ${prefix}* 2> /dev/null | sed "s=$prefix=="`; do
     echo "$blocks \c"
     ls -l1d "$dir"
   } | awk '{ print  $4, $1 "k", $7, $8, $9, $10 }'
-  echo "Delete recursively (y/n)? \c"
-  read ans
 
-  case "$ans" in
-    y* | Y* )
-      echo rm -rf "$prefix$pid"
-      rm -rf "$prefix$pid"
+  case "$force" in
+    t ) rm -rf "$prefix$pid" ;;
+    * )
+      echo "Delete recursively (y/n)? \c"
+      read ans
+
+      case "$ans" in
+        y* | Y* )
+          echo rm -rf "$prefix$pid"
+          rm -rf "$prefix$pid"
+         ;;
+      esac
+      echo
      ;;
   esac
-
-  echo
 done
 
 # eof
