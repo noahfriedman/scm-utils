@@ -1,0 +1,510 @@
+#! /bin/sh
+# cvs-fix-rep-perm --- fix cvs repository permissions
+
+# Author: Noah Friedman <friedman@splode.com>
+# Created: 1997-08-20
+
+# $Id$
+
+# Commentary:
+
+# If you want to use this script in the backend to CVS so that files
+# permissions are automatically corrected when changes are committed,
+# Add a line like the following to $CVSROOT/CVSROOT/loginfo:
+#
+#       ALL exec $CVSROOT/CVSROOT/cvs-fix-rep-perm -L %s
+#
+# assuming you install this script with your other administrative files.
+# Make sure perl is in your path or use the -P option.
+# You may wish to add other options as appropriate.
+
+# Code:
+
+# Name by which this script was invoked.
+progname=`echo "$0" | sed -e 's/[^\/]*\///g'`
+
+# To prevent hairy quoting and escaping later.
+bq='`'
+eq="'"
+
+usage="Usage: $progname {options}
+
+Options are:
+-D, --debug                  Turn on shell debugging ($bq${bq}set -x$eq$eq).
+-g, --group          GROUP   Change group of all files to GROUP.
+-h, --help                   You're looking at it.
+-L, --cvs-loginfo            This option is only used when invoked via
+                             the CVS ${bq}loginfo$eq administrative back end.
+                             This option may imply $bq--recursive$eq for
+                             some kinds of CVS operations (e.g. import).
+-m, --directory-mode PERM    Change mode of directories to PERM.
+                             This should be a numeric argument in octal.
+-P, --perl           PERL    (path)name of perl interpreter to use.
+-r, --recursive              Descend recursively into directories.
+-u, --umask          UMASK   Mask out these permission bits from files in
+                             the respository.
+                             This should be a numeric argument in octal.
+                             Note that this affects files only, not
+                             directories.  Use the $bq-p$eq option to set
+                             directory permissions.
+-v, --verbose                Print file names as they are modified.
+"
+
+# Initialize variables.
+# Don't use `unset' since old bourne shells don't have this command.
+# Instead, assign them an empty value.
+debug=
+perl="${PERL-perl}"
+CFRP_GROUP=
+CFRP_DIRPERM=02777
+CFRP_LOGINFO=
+CFRP_PROGNAME="$progname"
+CFRP_RECURSIVE=
+CFRP_UMASK=07222
+CFRP_VERBOSE=
+
+export CFRP_GROUP CFRP_DIRPERM CFRP_LOGINFO CFRP_PROGNAME
+export CFRP_RECURSIVE CFRP_UMASK CFRP_VERBOSE
+
+# Usage: eval "$getopt"; value=$optarg
+# or     optarg_optional=t; eval "$getopt"; value=$optarg
+#
+# This function automatically shifts the positional args as appropriate.
+# The argument to an option is optional if the variable `optarg_optional'
+# is non-empty.  Otherwise, the argument is required and getopt will cause
+# the program to exit on an error.  optarg_optional is reset to be empty
+# after every call to getopt.  The argument (if any) is stored in the
+# variable `optarg'.
+#
+# Long option syntax is `--foo=bar' or `--foo bar'.
+# For optional args, you must use the `--foo=bar' long option syntax
+# if the argument starts with `-', otherwise the argument will be ignored
+# and treated as the next option.
+#
+# Note: because of broken bourne shells, using --foo=bar syntax can
+# actually screw the quoting of args that end with trailing newlines.
+# Specifically, most shells strip trailing newlines from substituted
+# output, regardless of quoting.
+getopt='
+  {
+    optarg=
+    case "$1" in
+      --*=* ) optarg=`echo "$1" | sed -e "1s/^[^=]*=//"` ; shift ;;
+      -* )
+        case "${2+set}:$optarg_optional" in
+          set: ) optarg="$2" ; shift ; shift ;;
+          set:?* )
+            case "$2" in
+              -* ) shift ;;
+              * )  optarg="$2"; shift; shift ;;
+            esac
+           ;;
+          : )
+            option="$1"
+            case "$option" in
+              --*=* ) option=`echo "$option" | sed -e "1s/=.*//;q"` ;;
+            esac
+            echo "$progname: option $bq$option$eq requires argument." 1>&2
+            echo "$progname: use $bq--help$eq to list option syntax." 1>&2
+            exit 1
+           ;;
+          * ) shift ;;
+        esac
+       ;;
+    esac
+    optarg_optional=
+  }'
+
+# Parse command line arguments.
+# Make sure that all wildcarded options are long enough to be unambiguous.
+# It's a good idea to document the full long option name in each case.
+# Long options which take arguments will need a `*' appended to the
+# canonical name to match the value appended after the `=' character.
+while : ; do
+  case $# in 0) break ;; esac
+  case "$1" in
+    -D | --debug | --d* )
+      debug=-d
+      shift
+     ;;
+    -L | --cvs-loginfo | --c* )
+      CFRP_LOGINFO=t
+      shift
+     ;;
+    -h | --help | --h* )
+      echo "$usage" 1>&2
+      exit 0
+     ;;
+    -g | --group* | --g* )
+      eval "$getopt"
+      CFRP_GROUP="$optarg"
+     ;;
+    -m | --directory-mode* | --m* )
+      eval "$getopt"
+      CFRP_DIRPERM="$optarg"
+     ;;
+    -P | --perl* | --p* )
+      eval "$getopt"
+      perl="$optarg"
+     ;;
+    -r | --recursive | --r* )
+      CFRP_RECURSIVE=t
+      shift
+     ;;
+    -u | --umask* | --u* | --file-umask* | --f* )
+      eval "$getopt"
+      CFRP_UMASK="$optarg"
+     ;;
+    -v | --verbose | --v* )
+      CFRP_VERBOSE=t
+      shift
+     ;;
+    -- )     # Stop option processing
+      shift
+      break
+     ;;
+    -? | --* )
+      case "$1" in
+        --*=* ) arg=`echo "$1" | sed -e 's/=.*//'` ;;
+        * )     arg="$1" ;;
+      esac
+      exec 1>&2
+      echo "$progname: unknown or ambiguous option $bq$arg$eq"
+      echo "$progname: Use $bq--help$eq for a list of options."
+      exit 1
+     ;;
+    -??* )
+      # Split grouped single options into separate args and try again
+      optarg="$1"
+      shift
+      set fnord `echo "x$optarg" | sed -e 's/^x-//;s/\(.\)/-\1 /g'` ${1+"$@"}
+      shift
+     ;;
+    * )
+      break
+     ;;
+  esac
+done
+
+case "$debug" in -d ) set -x ;; esac
+
+exec $perl $debug - ${1+"$@"} <<'__EOF__'
+
+&main (@ARGV);
+
+sub main
+{
+  &disable_stdio_buffering (STDOUT, STDERR);
+
+  $group      =      &getenv ("CFRP_GROUP");
+  $dir_mode   = oct (&getenv ("CFRP_DIRPERM"));
+  $file_umask = oct (&getenv ("CFRP_UMASK"));
+
+  if (&getenv ("CFRP_LOGINFO"))
+    {
+      local ($cvsroot) = &getenv ("CVSROOT");
+      local ($module);
+
+      &fatal ("CVSROOT env var not defined") if (! defined ($cvsroot));
+      ($module, @_) = parse_loginfo_args ($cvsroot, @_);
+      &my_chdir ("$cvsroot/$module");
+    }
+
+  if (&getenv ("CFRP_RECURSIVE"))
+    {
+      foreach $arg (@_)
+        {
+          &grind_over_tree ($arg, 'fix_perms');
+        }
+    }
+  else
+    {
+      &fix_perms (@_);
+    }
+}
+
+# Parse args of the form: module file file file ...
+# where module is relative to the cvs root, and each file is a name
+# (probably sans `,v' suffix or Attic reference).
+# Return a list with the same relative module name followed by
+# corresponding file names that actually exist in the repository.
+#
+# Godforsaken cvs loginfo syntax specifies module name and all repository
+# files in a single argument, meaning that to properly parse file or
+# module names containing whitespace, we have a lot of work to do.
+# This still isn't correct; if someone tries to commit "foo bar" and
+# "foo" (in that order), then "foo bar" won't be parsed correctly; "foo"
+# will show up twice and "bar" will appear as a nonexistent file name.
+sub parse_loginfo_args
+{
+  local ($cvsroot) = $_[0];
+  local ($module, @args);
+
+  shift (@_); # strip off cvsroot
+
+  if ($_[0] =~ / - New directory/o)
+    {
+      $_[0] =~ s/ - New directory.*//o;
+      return @_;
+    }
+
+  if ($_[0] =~ / - Imported sources/o)
+    {
+      &putenv ('CFRP_RECURSIVE', 't');
+      $_[0] =~ s/ - Imported sources.*//o;
+      push (@_, '.');  # update recursively all files in module
+      return @_;
+    }
+
+  &pushdir ($cvsroot);
+
+  while ($#_ >= 0)
+    {
+      local ($name, $rest) = split (/ /o, $_[0], 2);
+      local ($new);
+
+      while (! -e $name)
+        {
+          local ($found_alternate) = 0;
+          foreach $try ("${name},v", "Attic/${name},v")
+            {
+              if (-e $try)
+                {
+                  $name = $try;
+                  $found_alternate = 1;
+                  last;
+                }
+            }
+          last if $found_alternate;
+
+          ($new, $rest) = split (/ /o, $rest, 2);
+          $name .= ' ' . $new if (defined ($new));
+          if (! -e $name && ! defined ($rest))
+            {
+              # It looks like the file as named just doesn't exist; some
+              # component somewhere is missing.  In that case, just parse
+              # the first word as a file name, then try again with the rest
+              # of the arguments.
+              ($name, $rest) = split (/ /o, $name, 2);
+              last;
+            }
+        }
+      shift (@_);
+      unshift (@_, $rest) if (defined ($rest));
+      push (@args, $name) if ($name ne '');
+
+      # The first name is the module; in order to check relative file names
+      # above we much chdir into the module directory.
+      if (! defined ($module))
+        {
+          $module = $name;
+          &my_chdir ("$cvsroot/$module");
+        }
+    }
+  &popdir () if defined ($module);
+  return @args;
+}
+
+sub grind_over_tree
+{
+  local ($dir, $action) = @_;
+  local (@files);
+
+  &$action ($dir);
+  return if (! -d $dir);
+
+  if (! opendir (DIRHNDL, $dir))
+    {
+      &err ("opendir", "$dir", "$!");
+      return;
+    }
+  @files = grep (!/^\.\.?$/, readdir (DIRHNDL));
+  close (DIRHNDL);
+
+  foreach $ent (@files)
+    {
+      &grind_over_tree ("$dir/$ent", $action);
+    }
+}
+
+sub fix_perms
+{
+  foreach $ent (@_)
+    {
+      if (-d $ent)
+        {
+          &verbose ("D $ent");
+          do_chgrp ($group, $ent);
+          do_chmod ($dir_mode, $ent);
+        }
+      else
+        {
+          &verbose ("F $ent");
+          do_chgrp ($group, $ent);
+          &chmod_owner_perms_to_all ($file_umask, $ent);
+        }
+    }
+}
+
+sub chmod_owner_perms_to_all
+{
+  local ($umask, @files) = @_;
+
+  foreach $file (@files)
+    {
+      # $statinfo[2] == mode
+      local (@statinfo) = stat ($file);
+      local ($newmode);
+
+      if (! defined (@statinfo))
+        {
+          &err ("stat", $file, "$!");
+          next;
+        }
+
+      $newmode = &owner_perms_to_all ($umask, $statinfo[2]);
+      if (chmod ($newmode, $file) == 0)
+        {
+          local ($snewmode) = sprintf ("0%o", $newmode);
+          &err ("chmod($snewmode)", $file, "$!");
+        }
+    }
+}
+
+sub owner_perms_to_all
+{
+  local ($umask, $origmode) = @_;
+  local ($newmode) = 0;
+  local ($o_mask) = 0700;     # constant
+  local ($ugo_mask ) = 0777;  # constant
+
+  # mask out all but ugo bits, then copy `o' bits to `g' and `o'.
+  $mode = $origmode & $o_mask;
+  $newmode = $mode | ($mode >> 3) | ($mode >> 6);
+
+  # Make sure ugo bits are zeroed out in old mode, then `or' in new bits.
+  $mode = ($origmode | $ugo_mask) ^ $ugo_mask;
+  $newmode = $mode | $newmode;
+
+  # Strip out any bits prohibited by umask.
+  return ($newmode | $umask) ^ $umask;
+}
+
+sub do_chmod
+{
+  local ($perm, @files) = @_;
+  local ($perm_str) = sprintf ("0%o", $perm);
+
+  foreach $file (@files)
+    {
+      if (chmod ($perm, $file) == 0)
+        {
+          &err ("chmod($perm_str)", $file, "$!");
+        }
+    }
+}
+
+sub do_chgrp
+{
+  return if (! defined ($group));
+
+  local ($group, @files) = @_;
+  local ($gid) = &grnam_to_gid ($group);
+
+  if (! defined ($gid))
+    {
+      &err ($group, "no such group");
+      return undef;
+    }
+
+  foreach $file (@files)
+    {
+      # Don't call chown on files that already have the gid we want, since
+      # that can reset setuid/gid permission bits.
+      next if ($gid == &gid_of_file ($file));
+
+      if (chown (-1, $gid, $file) == 0)
+        {
+          &err ("chgrp($group)", $file, "$!");
+        }
+    }
+}
+
+sub gid_of_file
+{
+  local (@stat) = stat ($_[0]);
+  return $stat[5];
+}
+
+sub grnam_to_gid
+{
+  local ($group) = @_;
+
+  $group = getgrnam ($group) if ($group !~ /^[0-9]+$/o);
+  return $group;
+}
+
+sub my_chdir
+{
+  &fatal ('chdir', $_[0], "$!") if (! chdir ($_[0]));
+}
+
+sub pushdir
+{
+  local ($pwd) = `pwd`;
+
+  &my_chdir (@_);
+  chop $pwd;
+  unshift (@dirstack, $pwd);
+}
+
+sub popdir
+{
+  &fatal ('popdir', 'directory stack empty')
+    if (! defined (@dirstack) || $#dirstack < 0);
+  &my_chdir ($dirstack[0]);
+  shift @dirstack;
+}
+
+sub getenv
+{
+  local ($x) = $ENV{$_[0]};
+  return $x if (defined ($x) && $x ne '');
+  return undef;
+}
+
+sub putenv
+{
+  $ENV{$_[0]} = $_[1];
+}
+
+sub err
+{
+  print (STDERR join(": ", &getenv ('CFRP_PROGNAME'), @_) . "\n");
+}
+
+sub fatal
+{
+  unshift (@_, '*** FATAL');
+  &err (@_);
+  exit (1);
+}
+
+sub verbose
+{
+  print (join(": ", @_) . "\n") if &getenv ("CFRP_VERBOSE");
+}
+
+sub disable_stdio_buffering
+{
+  foreach $handle (@_)
+    {
+      local ($orig_handle) = select ($handle);
+      $| = 1;
+      select ($orig_handle);
+    }
+}
+
+__EOF__
+
+# cvs-fix-rep-perm ends here
