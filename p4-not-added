@@ -1,0 +1,11 @@
+#!/bin/sh
+
+reg=/tmp/p4-not-added.$$.reg
+all=/tmp/p4-not-added.$$.all
+
+trap 'rm -f $reg $all' 0 1 2 3 15
+
+find `/bin/pwd` -type f -print | sort > $all
+p4 have ... | sed -e 's=.*#[0-9][0-9]* - ==' | sort > $reg
+
+diff $reg $all | sed -ne '/^> /s///p'
