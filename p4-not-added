@@ -1,11 +1,508 @@
 #!/bin/sh
+exec ${PERL-perl} -wSx $0 ${1+"$@"}
+#!perl
 
-reg=/tmp/p4-not-added.$$.reg
-all=/tmp/p4-not-added.$$.all
+# Author: Noah Friedman <friedman@splode.com>
+# Created: 2000-03-10
+# Public domain.
 
-trap 'rm -f $reg $all' 0 1 2 3 15
+# $Id$
 
-find `/bin/pwd` -type f -print | sed -e '/~$/d' | sort > $all
-p4 have ... | sed -e 's=.*#[0-9][0-9]* - ==' | sort > $reg
+# Commentary:
 
-diff $reg $all | sed -ne '/^> /s///p'
+# Usage: p4-not-added
+#        p4-not-added [dir1 [dir2 [...]]]
+
+# Print a list of all files in the working directory of the p4 client view
+# which are not actually part of the repository via a p4 add or sync.
+#
+# The following files are ignored:
+#   * Emacs backup (~) and autosave (#foo#) files.
+#   * files ending in .o, .a, .so, or .so.[version-number]
+
+# Code:
+
+package P4;
+
+use POSIX;
+use Symbol;
+use strict;
+
+sub new
+{
+  my $type = shift;
+  my $class = ref ($type) || $type;
+  my $self = (scalar @_ == 1) ? { %{shift()} } : { @_ };
+  bless ($self, (ref ($class) || $class));
+  return $self;
+}
+
+sub diag
+{
+  my $self = shift;
+  my $tm = POSIX::strftime ("%H:%M:%S", localtime(time));
+
+  my @args;
+  for my $arg (@_)
+    {
+      my $new = (ref $arg eq 'CODE') ? &$arg : $arg;
+      $new = $self->printobj ($new) if (ref $new);
+      push @args, $new if (defined $new);
+    }
+  print STDERR "$tm ", @args, "\n" if @args;
+}
+
+sub debug
+{
+  my $self = shift;
+  $self->diag (@_) if $self->{debug};
+}
+
+sub p4cmd
+{
+  my ($self, $cmd) = @_;
+
+  $self->debug ("(p4cmd) Executing command \"p4 $cmd\"");
+
+  local %ENV = %ENV;  # make copy
+  for my $p4env (qw(P4USER P4CLIENT P4PORT))
+    {
+      $ENV{$p4env} = $self->{$p4env} if (exists $self->{$p4env});
+    }
+  my $fh = gensym;
+  open ($fh, "p4 $cmd |");
+  return $fh;
+}
+
+# Args: basename, default-directory
+#
+# Convert basename to absolute, and canonicalize it.  Second arg
+# default-directory is directory to start with if basename is relative
+# (does not start with slash); if default-directory is undefined, the
+# current working directory is used.  File name components that are `.' are
+# removed, and so are file name components followed by `..', along with the
+# `..' itself; note that these simplifications are done without checking
+# that the file name actually exists in the file system.
+sub expand_file_name ($;$)
+{
+  my ($self, $basename, $defaultdir) = @_;
+  local $_ = $basename;
+  $_ = join ('/', ($defaultdir || getcwd ()), $_) unless (m|^/|o);
+
+  # These substitutions must be done in loops to handle overlapping `/'
+  # characters in adjacent patterns.
+  s|/\./|/|o         while (m|/\./|o);
+  s|//|/|o           while (m|//|o);
+  s|/[^/]+/\.\./|/|o while (m|/[^/]+/\.\./|o);
+  s|/[^/]+/\.\.$||o;
+  s|/.$||go;
+  # Eliminate leading `..'.
+  # It may be harmful to do it if the filesystem interprets `/..' as
+  # something not equivalent to `/'.
+  #s|^/\.\./|/|o     while (m|^/\.\./|o);
+
+  $self->debug ("(expand_file_name) $basename -> $_");
+
+  return $_;
+}
+
+# Parse the client to extract the root of the view as well as a list of
+# mappings between directories in the view and depot directories.
+# This map is used later to resolve the output of "p4 opened" to figure out
+# what files are potentially part of the repository.
+sub parse_client
+{
+  my $self = shift;
+  my (@viewline, @searchdirs);
+  my $current_field = "";
+
+  $self->debug ("(parse_client)");
+
+  my $fh = $self->p4cmd ("client -o");
+  while (<$fh>)
+    {
+      next if (/^$/o);
+      $current_field = lc $1 if /^(\S+):/o;
+      if ($current_field eq "view")
+        {
+          # Skip the header.
+          next if /^(\S+):/o;
+          push @viewline, $_;
+        }
+      elsif (/^Client:\s+(.*)/o)
+        {
+          $self->{client} = $1 unless exists $self->{client};
+        }
+      elsif (/^Root:\s+(.*)/o)
+        {
+          $self->{root}   = $1 unless exists $self->{root};
+        }
+    }
+  close ($fh);
+
+  my @vmap;
+  my $client = $self->{client};
+  my $root   = $self->{root};
+  for my $view (@viewline)
+    {
+      $view =~ s/^\s*(.*?)\s*\r?\n/$1/o;
+      my ($depot, $local) = split (/\s+/o, $view, 2);
+
+      # We leave the trailing slash on the vmap entries to avoid accidental
+      # collisions e.g. /foo/barbaz/quux != /foo/bar/...
+      $depot =~ s=/\.\.\.$=/=o;
+
+      $local =~ s=//$client/=$root/=;
+      $local =~ s=/\.\.\.$=/=o;
+
+      if ($local =~ m=/$=o)
+        {
+          # Strip trailing slash from the search directories so that
+          # concatenation in files_list will work properly.
+          (my $dir = $local) =~ s=/$==o;
+          push @searchdirs, $dir;
+        }
+      push @vmap, [$depot, $local];
+    }
+  $self->{view} = \@vmap;
+  $self->{searchdirs} = \@searchdirs;
+
+  $self->debug
+    (sub {
+       $self->diag ("(parse_client) root       = $self->{root}");
+       $self->diag ("(parse_client) client     = $self->{client}");
+       $self->diag ("(parse_client) view       = ", $self->{view});
+       $self->diag ("(parse_client) searchdirs = ", $self->{searchdirs});
+       undef;
+     });
+}
+
+sub _client_attr
+{
+  my ($self, $attr) = @_;
+  return $self->{$attr} if exists ($self->{$attr});
+  $self->parse_client ();
+  return $self->{$attr};
+}
+
+sub client    { $_[0]->_client_attr ('client') }
+sub root      { $_[0]->_client_attr ('root') }
+sub view      { $_[0]->_client_attr ('view') }
+sub searchdirs { $_[0]->_client_attr ('searchdirs') }
+
+# Build a list of all regular files in and below the directory specified as
+# the first argument.  Result is cached.
+sub add_localfiles
+{
+  my ($self, $dir) = @_;
+
+  my $dfh = gensym;
+  unless (opendir ($dfh, $dir))
+    {
+      $self->diag ("opendir: $dir: $!");
+      return;
+    }
+  # Skip `.', `..', backup files, autosaves, and object files.
+  my @files = sort grep (!/(?:^#|^\.\.?$|~$|\.[ao]|\.so(?:|[\d.]+)$)/o, readdir ($dfh));
+  closedir ($dfh);
+
+  for my $ent (@files)
+    {
+      my $file = join ("/", $dir, $ent);
+      my @stat = lstat ($file);
+      $self->diag ("stat: $file: $!") unless @stat;
+
+      # "_" reuses struct from previous stat call
+      next if (-l _); # Do not traverse symlinks
+      if (-d _)
+        {
+          $self->add_localfiles ($file);
+        }
+      elsif (-f _)
+        {
+          $self->{localfiles}->{$file} = 1;
+        }
+    }
+  $self->{localfiles};
+}
+
+sub localfiles
+{
+  my $self = shift;
+  return $self->{localfiles} if (exists $self->{localfiles});
+
+  for my $dir (@{$self->searchdirs ()})
+    {
+      (my $searchdirs = $dir) =~ s=/$==o;  # modify copy only
+      $self->add_localfiles ($searchdirs);
+    }
+
+  $self->debug
+    (sub {
+       $self->diag ("(localfiles) Considering the following local files: ");
+       for my $file (sort keys %{$self->{localfiles}})
+         {
+           $self->diag ("(localfiles)   ", $file);
+         }
+       undef;
+     });
+
+  return $self->{localfiles};
+}
+
+# Return a list of all files synced in the view; or if restricting
+# operation to specified directories, only consider files in those.
+sub have
+{
+  my $self = shift;
+  return $self->{have} if (exists $self->{have});
+
+  my $havecmd = "have";
+  if ($self->{searchdirs_restricted})
+    {
+      $havecmd = join (" ", "have", @{$self->restricted_file_specs ()});
+    }
+
+  my @have;
+  my $fh = $self->p4cmd ($havecmd);
+  while (<$fh>)
+    {
+      chop;
+      s=\S+#\d+ - ==o;
+      push @have, $_;
+    }
+  close ($fh);
+
+  $self->debug
+    (sub {
+       $self->diag ("(have) p4 client has the following files: ");
+       for my $file (sort @have)
+         {
+           $self->diag ("(have)   ", $file);
+         }
+       undef;
+     });
+
+  $self->{have} = \@have;
+}
+
+# Return a list of all files presently open for editing (including those
+# which are newly added).
+sub opened
+{
+  my ($self) = @_;
+  return $self->{opened} if (exists $self->{opened});
+
+  my $view = $self->view;
+
+  my @opened;
+
+  my $opencmd = "opened";
+  if ($self->{searchdirs_restricted})
+    {
+      $opencmd = join (" ", "opened", @{$self->restricted_file_specs ()});
+    }
+
+  # Supress stderr because if there are no opened files,
+  # a warning is printed.
+  my $fh = $self->p4cmd ($opencmd . " 2>/dev/null");
+  while (<$fh>)
+    {
+      chop;
+      s=#\d+\s.*==o;
+
+      for my $vmap (@$view)
+        {
+          my ($pat, $sub) = @$vmap;
+          next if (length $pat > length $_);
+          if ($pat eq substr ($_, 0, length $pat))
+            {
+              substr ($_, 0, length $pat) = $sub;
+              goto ENDLOOP;
+            }
+        }
+    ENDLOOP:
+      push @opened, $_;
+    }
+  close ($fh);
+
+  $self->debug
+    (sub {
+       $self->diag ("(opened) p4 client opened or added files: ");
+       for my $file (sort @opened)
+         {
+           $self->diag ("(opened)   ", $file);
+         }
+       undef;
+     });
+
+  $self->{opened} = \@opened;
+}
+
+sub restrict_searchdirs
+{
+  my ($self, $dirs) = @_;
+
+  my $root = $self->root ();
+  my $searchdirs = $self->searchdirs ();
+  my @newdirs;
+  for my $arg (@$dirs)
+    {
+      $arg = $self->expand_file_name ($arg);
+      if (length $arg < length $root
+          || substr ($arg, 0, length $root) ne $root)
+        {
+          $self->diag ("$arg is not under client root $root");
+          next;
+        }
+
+      my $found = 0;
+      for my $dir (@$searchdirs)
+        {
+          if (substr ($arg, 0, length $dir) eq $dir)
+            {
+              $found = 1;
+              last;
+            }
+        }
+      unless ($found)
+        {
+          $self->diag ("$arg not in client view");
+          next;
+        }
+      push @newdirs, $arg;
+    }
+
+  $self->debug ("(restrict_searchdirs) searchdirs = ", \@newdirs);
+
+  $self->{searchdirs_restricted} = 1;
+  $self->{searchdirs} = \@newdirs;
+}
+
+sub restricted_file_specs
+{
+  my $self = shift;
+
+  if ($self->{searchdirs_restricted})
+    {
+      my @dirs;
+      my $searchdirs = $self->searchdirs ();
+      for my $dir (@$searchdirs)
+        {
+          $dir .= "/"   unless ($dir =~ m=/(?:|\.\.\.)$=o);
+          $dir .= "..." unless ($dir =~ m=/\.\.\.$=o);
+          push @dirs, $dir;
+        }
+      return \@dirs;
+    }
+  return undef;
+}
+
+sub filter_p4_controlled
+{
+  my $self = shift;
+  return $self->{filtered_localfiles}
+    if (exists $self->{filtered_localfiles});
+
+  my $localfiles = $self->localfiles ();
+  return undef unless $localfiles;
+  my %files = %$localfiles;
+  for my $added (@{$self->have ()}, @{$self->opened ()})
+    {
+      $self->debug ("(filtered) dropping ", $added);
+      delete $files{$added};
+    }
+  $self->{filtered_localfiles} = \%files;
+}
+
+sub printobj
+{
+  my ($self, $obj, $indent) = @_;
+  my @list;
+
+  return 'undef' unless (defined $obj);
+  my $ref = ref $obj;
+
+  if ($ref eq 'ARRAY')
+    {
+      return '[]' unless @$obj;
+
+      my $lis = ", ";
+      my $is  = ", ";
+      if (defined $indent)
+        {
+          $lis = ",\n" . (" " x $indent);
+          $indent += 2;
+          $is =  ",\n" . (" " x $indent);
+        }
+
+      return ("[ "
+              . join ($is, map { $self->printobj ($_, $indent) } @$obj)
+              . " ]");
+    }
+  elsif ($ref eq 'HASH')
+    {
+      return '{}' unless %$obj;
+
+      my $lis = ", ";
+      my $is  = " ";
+      if (defined $indent)
+        {
+          $lis = ",\n" . (" " x $indent);
+          $indent += 2;
+          $is =  "\n" . (" " x $indent);
+        }
+
+      return ("{"
+              . $is
+              . join ("," . $is,
+                      map { my $s = sprintf ("%s => ",
+                                             ($_ =~ /^[a-z0-9_]+$/io
+                                              ? $_
+                                              : $self->printobj ($_)));
+                            my $i = $indent + length $s if (defined $indent);
+                            sprintf ("%s%s", $s,
+                                     $self->printobj ($obj->{$_}, $i)),
+                          } sort keys %$obj)
+              . $lis . "}");
+    }
+  elsif ($ref ne "" || $obj =~ /^[+-]?[\d.]+/o)
+    {
+      return $obj;
+    }
+  $obj =~ s/"/\\"/go;
+  return "\"$obj\"";
+}
+
+
+package main;
+
+use Getopt::Long;
+use strict;
+
+sub main
+{
+  my $debug = 0;
+
+  Getopt::Long::config ('bundling', 'autoabbrev');
+  GetOptions ("D|debug", \$debug);
+
+  my $p4 = P4->new (debug => $debug);
+  return unless $p4->searchdirs ();
+  if (@ARGV)
+    {
+      $p4->restrict_searchdirs (\@ARGV);
+      my $dirs = $p4->searchdirs ();
+      return unless ($dirs && @$dirs);
+    }
+  my $newfiles = $p4->filter_p4_controlled ();
+  print join ("\n", sort keys %$newfiles), "\n"
+    if ($newfiles && %$newfiles);
+}
+
+main ();
+
+# local variables:
+# mode: perl
+# eval: (auto-fill-mode 1)
+# end:
