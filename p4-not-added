@@ -6,7 +6,7 @@ exec ${PERL-perl} -wSx $0 ${1+"$@"}
 # Created: 2000-03-10
 # Public domain.
 
-# $Id: p4-not-added,v 1.4 2002/09/22 10:23:57 friedman Exp $
+# $Id: p4-not-added,v 1.5 2002/09/22 11:44:08 friedman Exp $
 
 # Commentary:
 
@@ -287,7 +287,7 @@ sub have
   while (<$fh>)
     {
       chop;
-      s=\S+#\d+ - ==o;
+      s=^.*?#\d+ - ==o;
       push @have, $_;
     }
   close ($fh);
