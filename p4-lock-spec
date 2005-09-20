@@ -1,0 +1,112 @@
+#!/bin/sh
+
+# p4-lock-spec --- report the current state of, or modify, the lock status
+#                  on a perforce client/label/branch spec
+# Author: Noah Friedman <friedman@splode.com>
+# Public domain.
+
+# $Id$
+
+# Commentary:
+
+# Perforce clients, branches, and labels all share a single namespace and
+# every one must be unique.  Since there is no ambiguity, this script will
+# determine the spec type automatically.
+
+# If a spec belongs to another host or another user, it will attempt to
+# modify the spec anyway by setting these options.  Unless the user has
+# locked their account with a password (or strong authentication is in use
+# by the server) the change should succeed.
+
+# Code:
+
+p4=${P4CMD-p4}
+
+# The order of precedence for these user env names is as documented in p4
+# client usage.
+p4user=${P4USER-${USER-${USERNAME-${LOGNAME-`whoami`}}}}
+p4host=${P4HOST-`uname -n`}
+
+case $1 in
+  -- ) shift ;;
+  -l | --lock   ) action=lock   ; shift ;;
+  -u | --unlock ) action=unlock ; shift ;;
+  -t | --toggle ) action=toggle ; shift ;;
+  -s | --status ) action=status ; shift ;;
+  '' | -* )
+    progname=`echo "$0" | sed -e 's/.*\///g'`
+    echo "Usage: $progname {-l|-u|-t|-s} spec ..." 1>&2
+    echo "       {--lock|--unlock|--toggle|--status} spec ..." 1>&2
+    exit 1 ;;
+   * ) action=status ;;
+esac
+
+for spec in ${1+"$@"} ; do
+  spectype=client
+
+  detail=`$p4 -s $spectype -o $spec`;
+  case $detail in
+    *"error: $spec is a "*", not a"* )
+      spectype=`echo "$detail" \
+                 | sed -ne 's/^error: [^ ]* is a \([^,]*\), not a.*/\1/p'`
+      detail=`$p4 -s $spectype -o $spec` ;;
+  esac
+
+  user= host= lockstate= exists=no
+  eval `echo "$detail" | sed -n \
+    -e 's/[ 	]/ /g' \
+    -e 's/^[^:]*:  *//' \
+    -e '/^Update:/s/.*/exists=yes/p' \
+    -e '/^Owner: \(.*\)/s//user=\1/p' \
+    -e '/^Host: \(.*\)/s//host=\1/p' \
+    -e '/^Options:.* \([^ ]*locked\).*/s//lockstate=\1/p'`
+
+  case $exists in
+    no ) echo $spec: spec does not exist ; continue ;;
+  esac
+
+  set fnord; shift
+  p4args=
+
+  if [ -n "$host" ] && [ $host != $p4host ]; then
+    set host=$host ${1+"$@"}
+    p4args="$p4args -H $host"
+  fi
+
+  if [ -n "$user" ] && [ $user != $p4user ]; then
+    set user=$user ${1+"$@"}
+    p4args="$p4args -u $user"
+  fi
+
+  if [ $action = toggle ]; then
+    case $lockstate in
+      locked   ) action=unlock ;;
+      unlocked ) action=lock   ;;
+    esac
+  elif [ $lockstate = ${action}ed ]; then
+    echo $spec: $spectype is already $lockstate ${1+"($*)"}
+    continue
+  fi
+
+  case $action in
+    status ) echo $spec: $spectype is $lockstate ${1+"($*)"} ;;
+    lock | unlock )
+      echo "$detail" \
+       | sed -e '/^info: /!d' \
+             -e s/// \
+             -e "/^Options:/s/[ 	][^ ]*locked/ ${action}ed/" \
+       | $p4 $p4args -s $spectype -i \
+       | { read l
+           case $l in
+             "info: "*" $spec saved." )
+               echo $spec: $spectype was $lockstate, \
+                    now ${action}ed ${1+"($*)"}
+               while read l; do : ; done ;; # flush output
+             * ) echo $spec: "$l"
+                 sed -e "s/^/$spec: /" ;;
+           esac
+         } ;;
+  esac
+done
+
+# eof
