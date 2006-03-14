@@ -1,0 +1,5 @@
+#!/bin/sh
+
+for f in ${1+"$@"}; do
+  co -l "$f" && chmod g+w "$f"
+done
