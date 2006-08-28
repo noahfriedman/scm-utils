@@ -1,0 +1,191 @@
+#!/bin/sh
+# $Id$
+
+initialize()
+{
+  rm -f $base,v
+  rcs -q -i -U $base,v < /dev/null
+}
+
+getrevs()
+{
+  sed -ne '/^revision /s///p' ${1-$logfile} \
+   | sort -t. -k1,1n -k2,2n -k3,3n -k4,4n -k5,5n -k6,6n
+}
+
+doci()
+{
+  getrevs \
+   | while read rev; do
+       echo "* checkin: $rev"
+
+       state= author= date= log= branches=
+       eval "`getrevinfo $rev`"
+
+       cp $rev $base
+
+       case $state in
+         dead ) co -q -f -M -r$lastrev $base ;;
+       esac
+
+       case $rev in
+         *.*.*.* ) orev=$rev rev=`echo $rev | sed -e 's/\.[0-9]*$//'` ;;
+       esac
+
+       ci -q -r$rev -s$state -w$author -d"$date" -m"$log" $base
+       lastrev=$rev
+     done
+}
+
+getrevinfo()
+{
+  sed -ne '/^revision '${1-1.1}'$/!d
+      :v
+      n
+      /^date: *\([^;]*\); *author: *\([^;]*\); *state: *\([^;]*\);.*/{
+        s//date="\1" author=\2 state=\3/
+        h
+        b v
+      }
+
+      /^branches: */{
+        s//branches="/
+        s/; */ /g
+        s/$/"/
+        H
+        b v
+      }
+
+      s/^/log=/
+      :l
+      /^[-=][-=][-=][-=][-=][-=][-=][-=][-=][-=][-=][-=][-=][-=][-=][-=][-=][-=][-=][-=][-=][-=]*/b e
+      s/\(["`]\)/\\\1/g
+      H
+      n
+      b l
+
+      :e
+      g
+      s/\(\nlog=\)/\1"/
+      s/$/"/
+      p
+      q'  $logfile
+}
+
+kv()
+{
+  echo kv=;
+  sed -ne '/^keyword substitution: */s//kv=/p' $logfile
+}
+
+desc()
+{
+  echo desc=;
+  sed -ne '
+    /^description:/!d
+    :l
+    n
+    /^----------------------------$/b e
+    H
+    b l
+    :e
+    g
+    s/\(["`]\)/\\\1/g
+    /^\n./!q
+    s/^\n/desc="/
+    s/$/"/
+    p
+' $logfile
+}
+
+tags()
+{
+  sed -ne '
+    /^symbolic names:/!d
+    :l
+    n
+    /^	/!q
+    s///
+    s/ *//g
+    s/\.0\././
+    p
+    b l
+  ' $logfile | tac
+}
+
+finalize()
+{
+  tags | while read tag; do
+    echo "* tag: $tag"
+    rcs -q -n$tag $base,v
+  done
+
+  eval "`kv`"
+  case $kv in
+    '' ) : ;;
+    * )
+      echo "* keyword substitution: $kv"
+      rcs -q -k$kv $base,v ;;
+  esac
+
+  if grep '^locks: strict' $logfile > /dev/null ; then
+    echo "* locks: strict"
+    rcs -q -L $base,v
+  fi
+
+  eval "`desc`"
+  case $desc in
+    '' ) : ;;
+    * )
+      echo "* Description:"
+      echo "$desc" | sed 's/^/	/'
+      rcs -q -t-"$desc" $base,v
+     ;;
+  esac
+
+}
+
+######
+#####
+
+cvs_init()
+{
+  mkdir .$base.d || exit 1
+}
+
+cvs_getlog()
+{
+  cvs log $base > .$base.d/$logfile
+}
+
+cvs_getrevs()
+{
+  getrevs .$base.d/$logfile \
+   | while read v; do
+       cvs update -p -r$v $base > .$base.d/$v
+     done
+}
+
+######
+######
+
+main()
+{
+  base=${1-file.c}
+  logfile=${2-cvs.log}
+
+  if [ -d CVS ]; then
+    cvs_init
+    cvs_getlog
+    cvs_getrevs
+    cd .$base.d || exit 1
+  fi
+
+  initialize
+  doci
+  finalize
+}
+
+main ${1+"$@"}
+
+# eof
