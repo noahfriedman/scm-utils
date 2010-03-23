@@ -1,0 +1,84 @@
+#!/usr/bin/env perl
+# hg-working-stat -- collect stat information about mercurial working files
+# Author: Noah Friedman <friedman@splode.com>
+# Created: 2010-03-22
+# Public domain
+
+# $Id$
+
+# Commentary:
+
+# Mercurial doesn't preserve file modes, timestamps, security contexts, and
+# other errata when updating a workspace.  This command can be used to
+# generate a checkpoint of this data in a workspace, and then restore it
+# after doing an update.
+
+# The format of the output is: user group perm mtime selinux_context filename
+
+# Code:
+
+$^W = 1; # enable warnings
+
+use Symbol;
+use strict;
+use File::ExtAttr qw(:all);
+#use POSIX qw(strftime);
+
+sub max
+{
+  my $elt = $_[0];
+  map { $elt = $_ if $_ > $elt } @_;
+  return $elt;
+}
+
+sub timestamps
+{
+  my $fh = gensym;
+
+  # Print entries in ascending order, so that later timestamps override
+  # earlier ones.
+  open ($fh, "hg log -r0:. --template \"{date|hgdate} {files}\\n\" @_ |") || die;
+
+  my %ts;
+  map { chomp;
+        my ($t, $o, @files) = split (/\s+/, $_);
+        my $ts = $t + $o;
+        map { $ts{$_} = $ts } @files;
+      } <$fh>;
+
+  return \%ts;
+}
+
+sub main
+{
+  my @files = `hg manifest -r.`;
+  chomp @files;
+
+  my $ts = timestamps (@files);
+  my %data;
+  map { my %f;
+        my @st      =  lstat ($_);
+        $f{owner}   =  getpwuid ($st[4]);
+        $f{group}   =  getgrgid ($st[5]);
+        $f{mode}    =  $st[2] & 07777;
+        $f{mtime}   =  $ts->{$_};
+        $f{context} =  getfattr ($_, 'selinux', { namespace => 'security' });
+        $f{context} =~ s/\0//g;
+
+        #$f{mtimestr} = strftime ("%Y-%m-%d:%H:%M:%S", gmtime ($f{mtime}));
+
+        $data{$_} = \%f;
+      } @files;
+
+  my $ctxlen = max (map { length $data{$_}->{context} } keys %data);
+  my $fmtctx = sprintf ("%%-%ds", $ctxlen);
+  my $fmt = "%s %s %4.4o %s $fmtctx %s\n";
+
+  map { local *d = $data{$_};
+        printf ($fmt, @::d{qw(owner group mode mtime context)}, $_);
+      } @files;
+}
+
+main (@ARGV);
+
+# eof
