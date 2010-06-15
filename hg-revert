@@ -1,0 +1,26 @@
+#!/bin/sh
+# $Id$
+
+statscript()
+{
+  for fmt in 'chown %u.%g' \
+             'chmod %a' \
+             'touch -d "%y"' \
+             'chcon %C'
+  do
+    stat -c "$fmt \"$1\";" "$2"
+  done
+}
+
+main()
+{
+  for f in "$@"; do
+    hg revert "$f"
+    eval `statscript "$f" "$f.orig"`
+    rm "$f.orig"
+  done
+}
+
+main "$@"
+
+# eof
