@@ -4,26 +4,17 @@
 # Created: 2013-02-26
 # Public domain
 
-# $Id$
+# $Id: p4-blame,v 1.1 2013/02/26 19:30:14 friedman Exp $
 
 # Commentary:
 # Code:
-
-$^W = 1; # enable warnings
 
 use FindBin;
 use lib "$FindBin::Bin/../lib/perl";
 use lib "$ENV{HOME}/lib/perl";
 
 use strict;
-use POSIX;
 use NF::P4cmd qw(:direct);
-
-sub change_info
-{
-  my @result = p4 (qw(describe -s), @_);
-  return $result[0];
-}
 
 sub log10 { log ($_[0]) / log (10) }
 
@@ -40,14 +31,16 @@ sub main
     {
       my $changeno = $elt->{lower};
       next unless defined $changeno;
-      unless (exists $change{$changeno})
+
+      my $info = $change{$changeno};
+      unless (defined $info)
         {
-          my $info = change_info ($changeno);
-          $info->{timestring} = strftime ("%Y/%m/%d", localtime ($info->{time}));
+          my @desc = p4 (qw(change -o), $changeno);
+          $info = $desc[0];
+          $info->{Date} = substr ($info->{Date}, 0, 10);
           $change{$changeno} = $info;
         }
-      my $info = $change{$changeno};
-      printf($fmt, $changeno, $info->{timestring}, $info->{user}, $line++, $elt->{data});
+      printf($fmt, $changeno, $info->{Date}, $info->{User}, $line++, $elt->{data});
     }
 }
 
