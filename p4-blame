@@ -1,0 +1,56 @@
+#!/usr/bin/env perl
+# p4-blame --- extended p4 annotate
+# Author: Noah Friedman <friedman@splode.com>
+# Created: 2013-02-26
+# Public domain
+
+# $Id$
+
+# Commentary:
+# Code:
+
+$^W = 1; # enable warnings
+
+use FindBin;
+use lib "$FindBin::Bin/../lib/perl";
+use lib "$ENV{HOME}/lib/perl";
+
+use strict;
+use POSIX;
+use NF::P4cmd qw(:direct);
+
+sub change_info
+{
+  my @result = p4 (qw(describe -s), @_);
+  return $result[0];
+}
+
+sub log10 { log ($_[0]) / log (10) }
+
+sub main
+{
+  my @data = p4 (qw(annotate -c -db -dw -dl), @_);
+  my %change;
+
+  my $line = 1;
+  my $linewidth = 1 + int (log10 (scalar @data));
+  my $fmt = sprintf ("%%6d  %%s  %%-9s  %%%dd: %%s", $linewidth);
+
+  for my $elt (@data)
+    {
+      my $changeno = $elt->{lower};
+      next unless defined $changeno;
+      unless (exists $change{$changeno})
+        {
+          my $info = change_info ($changeno);
+          $info->{timestring} = strftime ("%Y/%m/%d", localtime ($info->{time}));
+          $change{$changeno} = $info;
+        }
+      my $info = $change{$changeno};
+      printf($fmt, $changeno, $info->{timestring}, $info->{user}, $line++, $elt->{data});
+    }
+}
+
+main (@ARGV);
+
+# eof
