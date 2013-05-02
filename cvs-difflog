@@ -1,0 +1,29 @@
+#!/bin/sh
+# $Id$
+# Public domain
+
+revlist()
+{
+    cvs log -b -N -S "$@" | sed -ne '/^revision /s///p' | tac
+}
+
+cvsdiff()
+{
+    cvs diff ${CVS_DIFF_FLAGS- -Bbu} -r$1 -r$2 "$3"
+}
+
+main()
+{
+    for file in "$@"; do
+        set x `revlist $file`
+        shift
+        while [ $# -gt 1 ]; do
+            cvsdiff $1 $2 "$file"
+            shift
+        done
+    done
+}
+
+main "$@"
+
+# eof
