@@ -4,20 +4,9 @@
 # Created: 2000-03-10
 # Public domain.
 
-# $Id$
+# $Id: p4-not-added,v 1.7 2013/06/25 01:08:36 friedman Exp $
 
 # Commentary:
-
-# Usage: p4-not-added
-#        p4-not-added [dir1 [dir2 [...]]]
-
-# Print a list of all files in the working directory of the p4 client view
-# which are not actually part of the repository via a p4 add or sync.
-#
-# The following files are ignored:
-#   * Emacs backup (~) and autosave (#foo#) files.
-#   * without "-a" option, files ending in .o, .a, .so, or .so.[version-number]
-
 # Code:
 
 use strict;
@@ -26,21 +15,35 @@ use FindBin;
 use lib "$FindBin::Bin/../lib/perl";
 use lib "$ENV{HOME}/lib/perl";
 
+use Getopt::Long;
+use Pod::Usage;
+
 use NF::P4cmd     qw(:direct);
 use NF::FileUtil  qw(:name :dir);
 
-my %opt = ( all => 0 );
+my %opt = ( all        => 0,
+            ignoreview => 0,
+          );
 
 sub parse_options
 {
+  my $help = -1;
+
+  p4_process_cmdline_options ($_[0]);
   local *ARGV = \@{$_[0]}; # modify our local arglist, not real ARGV.
 
   my $parser = Getopt::Long::Parser->new;
   $parser->configure (qw(bundling autoabbrev));
   my $succ = $parser->getoptions
-    ( "D|debug" => \$NF::P4cmd::DEBUG,
-      "a|all"   => \$opt{all},
+    ( "D|debug"       => \$NF::P4cmd::DEBUG,
+      "h|help+"       => \$help,
+
+      "a|all"         => \$opt{all},
+      "i|ignore-view" => \$opt{ignoreview},
     );
+
+  pod2usage (-exitstatus => 1, -verbose => 0)     unless $succ;
+  pod2usage (-exitstatus => 0, -verbose => $help) if $help >= 0;
 }
 
 sub make_p4_patterns
@@ -74,6 +77,19 @@ sub in_depot
   return \%file;
 }
 
+# Filter out any files which are not in the client view.
+# Returns a new arrayref.
+sub in_client_view
+{
+  my ($p4info, $localfile) = @_;
+
+  my @wsfiles;
+  map { push @wsfiles, $_->{path} if exists $_->{path}
+      } p4 ([keys %$localfile], "where");
+
+  return \@wsfiles;
+}
+
 sub local_files
 {
   my %file;
@@ -92,9 +108,11 @@ sub main
 {
   parse_options (\@_);
 
-  my $whole_workspace = @_ == 0;
-
   my $p4info = [p4 ("info")]->[0];
+  die "You don't appear to be in any p4 client workspace.\n"
+    unless exists $p4info->{clientRoot};
+
+  my $whole_workspace = @_ == 0;
   @_ = ($p4info->{clientRoot}) unless @_;
 
   use vars qw(%in_depot);
@@ -105,18 +123,84 @@ sub main
 
   map { delete $localfile{$_} } keys %in_depot;
 
+  my $wsfiles = ($opt{ignoreview}
+                 ? [keys %localfile]
+                 : in_client_view ($p4info, \%localfile));
+
   if ($whole_workspace)
     {
-      map { print $_, "\n" } sort keys %localfile;
+      map { print $_, "\n" } sort @$wsfiles;
     }
   else
     {
       my $cwd = $p4info->{clientCwd};
       map { print make_relative_directory_path ($_, $cwd), "\n"
-          } sort keys %localfile;
+          } sort @$wsfiles;
     }
 }
 
 main (@ARGV);
 
-# eof
+1;
+
+__END__
+
+=head1 NAME
+
+ p4-not-added - list local files which have no revisions in the p4 depot
+
+=head1 SYNOPSIS
+
+     {-D|--debug}
+     {-h|--help}
+     {-a|--all}
+     {-i|--ignore-view}
+
+     {dir1 {dir2 {...}}}
+
+ The -h option may be repeated up to 3 times for increased verbosity.
+
+=head1 OPTIONS
+
+Long-format options may be abbreviated as long as the result is not ambiguous.
+
+=over 8
+
+=item B<-a>, B<--all>
+
+Do not filter out object files, static libraries, shared libraries, or emacs backup files.
+
+=item B<-i>, B<--ignore-view>
+
+Report all files under the client workspace root, even if they are excluded
+from the client view mapping.
+
+=back
+
+=head1 DESCRIPTION
+
+This program prints a list of files in the current p4 client workspace
+which are not actually part of the repository via a C<p4 add> or C<p4 sync>.
+
+By default, all files throughout the workspace are scanned.  If one or more
+file or directory arguments are specified, only those files and
+subdirectories are searched.
+
+By default, the following file patterns are ignored:
+
+=over 8
+
+=item Emacs backup (C<~>) and autosave (C<#foo#>) files.
+
+=item files ending in C<.lib>, C<.dll>, C<.o>, C<.a>, C<.so>, or C<.so.I<[version-number]>>
+
+=back
+
+You can override this filter with the B<--all> option.
+
+Furthermore, files which exist outside the scope of the client view are
+ignored by default, so if there are exclusionary mappings in the client
+spec, the reported list of files may be shorter than expected.  This can be
+overridden with the B<--ignore-view> option.
+
+=cut
