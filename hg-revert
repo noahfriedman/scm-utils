@@ -1,24 +1,62 @@
 #!/bin/sh
-# $Id$
+# $Id: hg-revert,v 1.1 2010/06/15 13:37:20 friedman Exp $
 
-statscript()
+docmd()
 {
-  for fmt in 'chown %u.%g' \
-             'chmod %a' \
-             'touch -d "%y"' \
-             'chcon %C'
-  do
-    stat -c "$fmt \"$1\";" "$2"
-  done
+    case $verbose in
+        t ) (set -x; "$@") ;;
+        * ) "$@" ;;
+    esac
+}
+
+xstat()
+{
+    u_sys=${u_sys-`uname -s`}
+
+    case $u_sys in
+        Linux )
+            stat -c "%u:%g %a %Y %C"     "$@" ;;
+        FreeBSD | NetBSD | Darwin )
+            stat -f '%u:%g %OMp%OLp %Dm' "$@" ;;
+    esac 2> /dev/null
 }
 
 main()
 {
-  for f in "$@"; do
-    hg revert "$f"
-    eval `statscript "$f" "$f.orig"`
-    rm "$f.orig"
-  done
+    verbose=
+    case $1 in
+        -[vx] ) verbose=t ; shift ;;
+    esac
+
+    for f in "$@"; do
+        set x `xstat "$f"`
+
+        had_orig=no
+        if [ -f "$f.orig" ]; then
+            had_orig=yes
+        fi
+
+        docmd hg revert "$f"
+        test -f "$f" || continue
+
+        case $had_orig in
+            no ) test -f "$f.orig" && docmd rm "$f.orig" ;;
+        esac
+
+        t=`hg log -l 1 --template "{date(date, '%s')}\n" "$f" 2> /dev/null`
+        case $t in '' ) t=$4 ;; esac
+        docmd touch -d "@$t" "$f"
+
+        case $# in
+            4 | 5 )
+                docmd  chown     "$2" "$f"
+                docmd  chmod     "$3" "$f"
+                case "$5" in
+                    *:*:* ) docmd chcon "$5" "$f" ;;
+                esac
+                : ;; # always return success
+        esac
+    done
 }
 
 main "$@"
