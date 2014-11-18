@@ -1,0 +1,86 @@
+#!/usr/bin/env perl
+# git-restore-commit-mtime
+# Author: Noah Friedman <friedman@splode.com>
+# Created: 2014-11-17
+# Public domain
+
+# $Id$
+
+# Commentary:
+
+# TODO:
+#
+# * find root of git repo and modify file names to be relative to that, so
+#   that you don't have to be at the root of the repo before running command.
+# * modify directory to mtime of most recent file in dir?
+# * Verbose options.  Options in general.
+# * Documentation.
+
+# Code:
+
+$^W = 1;
+
+use strict;
+
+# Like `` but avoids shell exec/reparsing.
+sub cmd_out
+{
+  my $fh;
+  my $pid = open ($fh, "-|");
+  die "fork: $!" unless defined $pid;
+
+  local $/ = wantarray ? $/ : undef;
+  return <$fh> if $pid; # parent
+
+  exec (@_) or die "exec: $_[0]: $!";  # child
+}
+
+sub git_live_files
+{
+  @_ = '@' unless @_;
+  local $_ = cmd_out (qw(git ls-tree -z -r --name-only), @_);
+
+  my %tbl = map { $_ => undef } split (/\0/, $_);
+  return wantarray ? %tbl : \%tbl;
+}
+
+sub git_log_data
+{
+  @_ = '@' unless @_;
+  local $_ = cmd_out (qw(git log -z --format=format:%ct --name-status), @_);
+
+  my $have = git_live_files (@_);
+
+  my %tbl;
+  while (/(\d+)\n(.*?)(?:\0\0|\0$)/g)
+    {
+      my ($mtime, $files) = ($1, $2);
+      while ($files =~ /([^\0])\0([^\0]+)/g)
+        {
+          next unless exists $have->{$2};
+          $tbl{$2} = $mtime unless exists $tbl{$2} && $mtime < $tbl{$2};
+        }
+    }
+
+  return unless %tbl;
+  return wantarray ? %tbl : \%tbl;
+}
+
+sub set_mtimes
+{
+  my $tbl = shift;
+
+  map { my $tm = $tbl->{$_};
+        utime ($tm, $tm, $_);
+      } keys %$tbl;
+}
+
+sub main
+{
+  my %tbl = git_log_data (@_);
+  set_mtimes (\%tbl);
+}
+
+main (@ARGV);
+
+# eof
