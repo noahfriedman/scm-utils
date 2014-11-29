@@ -1,0 +1,63 @@
+#!/usr/bin/env perl
+# git-track-remote-branches --- create local branches for all remotes
+# Author: Noah Friedman <friedman@splode.com>
+# Created: 2014-11-28
+# Public domain
+
+# $Id$
+
+# Commentary:
+
+# Usage: cd to-top-of-repo; git-track-remote-branches
+
+# Code:
+
+$^W = 1;  # enable warnings
+
+use strict;
+
+# Like `` but avoids shell exec/reparsing.
+sub cmd_out
+{
+  my $fh;
+  my $pid = open ($fh, "-|");
+  die "fork: $!" unless defined $pid;
+
+  local $/ = wantarray ? $/ : undef;
+  return <$fh> if $pid;                # parent
+
+  exec (@_) or die "exec: $_[0]: $!";  # child
+}
+
+sub git_branch
+{
+  my %result;
+  map { s=^\*?\s*(?:remotes/)?==;
+        $result{$_} = undef unless / -> /;
+      } split (/[\r\n]+/, cmd_out (qw(git branch), @_));
+  return %result;
+}
+
+sub main
+{
+  my %loc = git_branch ("-l");
+  my %rem = git_branch ("-r");
+
+  map { (my $lname = $_) =~ s=^origin/==;
+        if (exists $loc{$lname})
+          {
+            delete $rem{$_};
+          }
+        else
+          {
+            $rem{$_} = $lname;
+          }
+      } keys %rem;
+
+  map { system (qw(git branch --track), $rem{$_}, $_);
+      } sort keys %rem;
+}
+
+main (@ARGV);
+
+# eof
