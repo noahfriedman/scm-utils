@@ -4,8 +4,6 @@
 # Created: 2014-11-17
 # Public domain
 
-# $Id: git-restore-commit-mtime,v 1.1 2014/11/18 07:41:02 friedman Exp $
-
 # Commentary:
 
 # Usage: cd to-top-of-repo; git-restore-commit-mtime;
@@ -20,7 +18,6 @@
 #
 # * find root of git repo and modify file names to be relative to that, so
 #   that you don't have to be at the root of the repo before running command.
-# * modify directory to mtime of most recent file in dir?
 # * Verbose options.  Options in general.
 # * Documentation.
 
@@ -40,7 +37,7 @@ sub cmd_out
   local $/ = wantarray ? $/ : undef;
   return <$fh> if $pid;                # parent
 
-  exec (@_) or die "exec: $_[0]: $!";  # child
+  exec ({ $_[0] } @_) or die "exec: $_[0]: $!";  # child
 }
 
 sub git_live_files
@@ -53,6 +50,8 @@ sub git_log_data
 {
   @_ = '@' unless @_;
 
+  # Adding a path so that we only get commits with files slows this down
+  # considerably.  We'll just skip the file-less commits below.
   my $data = cmd_out (qw(git log -z --format=format:%ct --name-only), @_);
   my %tbl;
 
@@ -69,11 +68,14 @@ sub git_log_data
       my $end = ($data =~ m/\0\0/g) ? pos($data) - 2 : $len;
       my ($mtime, $files)
         = split (/\n/, substr ($data, $off, $end - $off), 2);
-      $mtime =~ s/^.*\0//;  # skip changelists with no files
 
-      map { $tbl{$_} = $mtime
-              unless exists $tbl{$_} || !exists $have{$_};
-          } split (/\0/, $files);
+      if ($files)
+        {
+          $mtime =~ s/^.*\0//;  # skip changelists with no files
+          map { $tbl{$_} = $mtime
+                  unless exists $tbl{$_} || !exists $have{$_};
+              } split (/\0/, $files);
+        }
 
       $off = $end;
     }
@@ -82,13 +84,34 @@ sub git_log_data
   return \%tbl;
 }
 
+# After restoring file mtimes, set directory mtimes to the time of the most
+# recently edited file in that directory.
+# Directories that are empty other than other directories will inherit the
+# timestamp of some immediate subdirectory, but which one is not specified.
 sub set_mtimes
 {
   my $tbl = shift;
 
+  my %dirtbl;
   while (my ($file, $mtime) = each %$tbl)
     {
+      (my $dir = $file) =~ s=/[^/]*$==;
+      $dir = "." if $dir eq $file;
+      $dirtbl{$dir} = $mtime
+        unless exists $dirtbl{$dir} && $dirtbl{$dir} > $mtime;
+
       utime ($mtime, $mtime, $file);
+    }
+
+  while (my ($dir, $mtime) = each %dirtbl)
+    {
+      utime ($mtime, $mtime, $dir);
+
+      while ($dir =~ m=/=)
+        {
+          $dir =~ s=/[^/]*$==;
+          utime ($mtime, $mtime, $dir) unless exists $dirtbl{$dir};
+        }
     }
 }
 

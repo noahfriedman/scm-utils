@@ -4,8 +4,6 @@
 # Created: 2014-11-28
 # Public domain
 
-# $Id$
-
 # Commentary:
 
 # Usage: cd to-top-of-repo; git-track-remote-branches
@@ -24,9 +22,8 @@ sub cmd_out
   die "fork: $!" unless defined $pid;
 
   local $/ = wantarray ? $/ : undef;
-  return <$fh> if $pid;                # parent
-
-  exec (@_) or die "exec: $_[0]: $!";  # child
+  return <$fh> if $pid;                          # parent
+  exec ({ $_[0] } @_) or die "exec: $_[0]: $!";  # child
 }
 
 sub git_branch
@@ -43,7 +40,7 @@ sub main
   my %loc = git_branch ("-l");
   my %rem = git_branch ("-r");
 
-  map { (my $lname = $_) =~ s=^origin/==;
+  map { (my $lname = $_) =~ s=^.*?/==;
         if (exists $loc{$lname})
           {
             delete $rem{$_};
