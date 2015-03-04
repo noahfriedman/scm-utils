@@ -1,14 +1,24 @@
 #!/bin/sh
-# $Id$
+# $Id: cvs-tags,v 1.1 2004/06/14 16:47:02 friedman Exp $
 
 # Print a list of unique symbolic tags for the CVS files traversed.
+# With -t, show release tags only.
+# With -b, show branch tags only.
+
+case $1 in
+    -b ) bexpr='/\.0\./!b l' ; shift ;;
+    -t ) bexpr='/\.0\./b l'  ; shift ;;
+    *  ) bexpr=':i' ;;
+esac
 
 cvs -q log -h "$@" \
- | sed -n -e '/symbolic names:/!d' \
+    | sed -n \
+          -e '/symbolic names:/!d' \
           -e ':l' \
           -e 'n' \
+          -e "$bexpr" \
           -e '/^[ 	]/{' \
           -e '  s/:.*//;s/^[ 	]*//p' \
           -e '}' \
           -e 't l' \
-  | sort -u
+    | sort -u
