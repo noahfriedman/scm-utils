@@ -4,7 +4,7 @@
 # Created: 2013-02-26
 # Public domain
 
-# $Id: p4-blame,v 1.1 2013/02/26 19:30:14 friedman Exp $
+# $Id: p4-blame,v 1.2 2013/02/26 20:50:42 friedman Exp $
 
 # Commentary:
 # Code:
@@ -25,7 +25,7 @@ sub main
 
   my $line = 1;
   my $linewidth = 1 + int (log10 (scalar @data));
-  my $fmt = sprintf ("%%6d  %%s  %%-9s  %%%dd: %%s", $linewidth);
+  my $fmt = sprintf ("%%7d  %%s  %%-9s  %%%dd: %%s", $linewidth);
 
   for my $elt (@data)
     {
