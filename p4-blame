@@ -4,24 +4,39 @@
 # Created: 2013-02-26
 # Public domain
 
-# $Id: p4-blame,v 1.2 2013/02/26 20:50:42 friedman Exp $
+# $Id: p4-blame,v 1.3 2015/08/14 23:31:52 friedman Exp $
 
 # Commentary:
 # Code:
+
+$^W = 1;
+
+use strict;
 
 use FindBin;
 use lib "$FindBin::Bin/../lib/perl";
 use lib "$ENV{HOME}/lib/perl";
 
-use strict;
 use NF::P4cmd qw(:direct);
 
 sub log10 { log ($_[0]) / log (10) }
+sub uniq  { keys { map { $_ => undef } @_ } }
 
 sub main
 {
   my @data = p4 (qw(annotate -c -db -dw -dl), @_);
-  my %change;
+  if ($data[0]->{code} eq 'error')
+    {
+      print STDERR $data[0]->{data};
+      exit (1);
+    }
+  shift @data unless exists $data[0]->{lower}; # skip initial depotFile record.
+
+  my @cmd = map { "change -o $_" } uniq (map { $_->{lower} } @data);
+  my %change = map { $_->{Date}   =  substr ($_->{Date}, 0, 10);
+                     $_->{Change} => $_
+                   } p4 (\@cmd, "-b", scalar @cmd, "run");
+  undef @cmd; # gc
 
   my $line = 1;
   my $linewidth = 1 + int (log10 (scalar @data));
@@ -30,16 +45,7 @@ sub main
   for my $elt (@data)
     {
       my $changeno = $elt->{lower};
-      next unless defined $changeno;
-
       my $info = $change{$changeno};
-      unless (defined $info)
-        {
-          my @desc = p4 (qw(change -o), $changeno);
-          $info = $desc[0];
-          $info->{Date} = substr ($info->{Date}, 0, 10);
-          $change{$changeno} = $info;
-        }
       printf($fmt, $changeno, $info->{Date}, $info->{User}, $line++, $elt->{data});
     }
 }
