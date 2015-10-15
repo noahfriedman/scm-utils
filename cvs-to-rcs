@@ -1,45 +1,50 @@
-#!/bin/sh
-# $Id$
+#!/usr/bin/env bash
+# cvs-to-rcs --- build complete rcs file archive from cvs checkout
+# Author: Noah Friedman <friedman@splode.com>
+# Created: 2006-08-28
+# Public domain.
+
+# $Id: cvs-to-rcs,v 1.1 2006/08/28 07:55:24 friedman Exp $
 
 initialize()
 {
-  rm -f $base,v
-  rcs -q -i -U $base,v < /dev/null
+    rm -f $base,v
+    rcs -q -i -U $base,v < /dev/null
 }
 
 getrevs()
 {
-  sed -ne '/^revision /s///p' ${1-$logfile} \
-   | sort -t. -k1,1n -k2,2n -k3,3n -k4,4n -k5,5n -k6,6n
+    sed -ne '/^revision /s///p' ${1-$logfile} |
+        sort -t. -k1,1n -k2,2n -k3,3n -k4,4n -k5,5n -k6,6n
 }
 
 doci()
 {
-  getrevs \
-   | while read rev; do
-       echo "* checkin: $rev"
+    getrevs |
+        while read rev; do
+            echo "* checkin: $rev"
 
-       state= author= date= log= branches=
-       eval "`getrevinfo $rev`"
+            state= author= date= log= branches=
+            eval "`getrevinfo $rev`"
 
-       cp $rev $base
+            case $state in
+                dead )
+                    br=${rev%.*}
+                    this=${rev##*.}
+                    lastrev=$br.$((this - 1))
+                    cp $lastrev $rev
+                    ;;
+            esac
 
-       case $state in
-         dead ) co -q -f -M -r$lastrev $base ;;
-       esac
+            cp $rev $base
 
-       case $rev in
-         *.*.*.* ) orev=$rev rev=`echo $rev | sed -e 's/\.[0-9]*$//'` ;;
-       esac
-
-       ci -q -r$rev -s$state -w$author -d"$date" -m"$log" $base
-       lastrev=$rev
-     done
+            ci -q -f -r$rev -s$state -w$author -d"$date" -m"$log" $base
+        done
 }
 
 getrevinfo()
 {
-  sed -ne '/^revision '${1-1.1}'$/!d
+    sed -ne '/^revision '${1-1.1}'$/!d
       :v
       n
       /^date: *\([^;]*\); *author: *\([^;]*\); *state: *\([^;]*\);.*/{
@@ -74,75 +79,77 @@ getrevinfo()
 
 kv()
 {
-  echo kv=;
-  sed -ne '/^keyword substitution: */s//kv=/p' $logfile
+    echo kv=;
+    sed -ne '/^keyword substitution: */s//kv=/p' $logfile
 }
 
 desc()
 {
-  echo desc=;
-  sed -ne '
-    /^description:/!d
-    :l
-    n
-    /^----------------------------$/b e
-    H
-    b l
-    :e
-    g
-    s/\(["`]\)/\\\1/g
-    /^\n./!q
-    s/^\n/desc="/
-    s/$/"/
-    p
-' $logfile
+    echo desc=;
+    sed -ne '
+        /^description:/!d
+        :l
+        n
+        /^----------------------------$/b e
+        H
+        b l
+        :e
+        g
+        s/\(["`]\)/\\\1/g
+        /^\n./!q
+        s/^\n/desc="/
+        s/$/"/
+        p
+    ' $logfile
 }
 
 tags()
 {
-  sed -ne '
-    /^symbolic names:/!d
-    :l
-    n
-    /^	/!q
-    s///
-    s/ *//g
-    s/\.0\././
-    p
-    b l
-  ' $logfile | tac
+    sed -ne '
+      /^symbolic names:/!d
+      :l
+      n
+      /^	/!q
+      s///
+      s/ *//g
+      s/\.0\././
+      p
+      b l
+    ' $logfile | tac
 }
 
 finalize()
 {
-  tags | while read tag; do
-    echo "* tag: $tag"
-    rcs -q -n$tag $base,v
-  done
+    tags | while read tag; do
+        echo "* tag: $tag"
+        rcs -q -n$tag $base,v
+    done
 
-  eval "`kv`"
-  case $kv in
-    '' ) : ;;
-    * )
-      echo "* keyword substitution: $kv"
-      rcs -q -k$kv $base,v ;;
-  esac
+    eval "`kv`"
+    case $kv in
+        '' ) : ;;
+        * )
+            echo "* keyword substitution: $kv"
+            rcs -q -k$kv $base,v ;;
+    esac
 
-  if grep '^locks: strict' $logfile > /dev/null ; then
-    echo "* locks: strict"
-    rcs -q -L $base,v
-  fi
+    if grep '^locks: strict' $logfile > /dev/null ; then
+        echo "* locks: strict"
+        rcs -q -L $base,v
+    fi
 
-  eval "`desc`"
-  case $desc in
-    '' ) : ;;
-    * )
-      echo "* Description:"
-      echo "$desc" | sed 's/^/	/'
-      rcs -q -t-"$desc" $base,v
-     ;;
-  esac
+    eval "`desc`"
+    case $desc in
+        '' ) : ;;
+        * )
+            echo "* Description:"
+            echo "$desc" | sed 's/^/	/'
+            rcs -q -t-"$desc" $base,v
+            ;;
+    esac
 
+    stamp=`rlog -N -r $base,v | sed -ne '/^date: \([^;]*\);.*/!d;s//\1/p'`
+    touch -d "$stamp UTC" $base,v
 }
 
 ######
@@ -150,40 +157,70 @@ finalize()
 
 cvs_init()
 {
-  mkdir .$base.d || exit 1
+    mkdir .$base.d || exit 1
 }
 
 cvs_getlog()
 {
-  cvs log $base > .$base.d/$logfile
+    cvs log $base > .$base.d/$logfile
 }
 
 cvs_getrevs()
 {
-  getrevs .$base.d/$logfile \
-   | while read v; do
-       cvs update -p -r$v $base > .$base.d/$v
-     done
+    getrevs .$base.d/$logfile |
+        while read v; do
+            cvs update -p -r$v $base > .$base.d/$v
+        done
 }
 
 ######
 ######
 
+convert()
+{
+    base=${1-file.c}
+    logfile=${2-cvs.log}
+
+    if [ -d CVS ]; then
+        cvs_init
+        cvs_getlog
+        cvs_getrevs
+        ( cd .$base.d || exit 1
+
+          initialize
+          doci
+          finalize
+
+          case $CVS2RCS_DEBUG in
+              '' ) mv $base,v ..
+                   cd ..
+                   rm -rf .$base.d ;;
+          esac
+        )
+    else
+        initialize
+        doci
+        finalize
+    fi
+}
+
 main()
 {
-  base=${1-file.c}
-  logfile=${2-cvs.log}
-
-  if [ -d CVS ]; then
-    cvs_init
-    cvs_getlog
-    cvs_getrevs
-    cd .$base.d || exit 1
-  fi
-
-  initialize
-  doci
-  finalize
+    for file in "$@"; do
+        if [ -f "$file" ]; then
+            (convert $file)
+        else
+            find $file \( -name CVS -prune \) -o -type d -print |
+                while read d; do
+                    ( cd $d
+                      for f in .* *; do
+                          test -f $f || continue
+                          (convert $f)
+                      done
+                    )
+                done
+        fi
+    done
 }
 
 main ${1+"$@"}
