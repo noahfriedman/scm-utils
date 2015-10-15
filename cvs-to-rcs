@@ -4,7 +4,7 @@
 # Created: 2006-08-28
 # Public domain.
 
-# $Id: cvs-to-rcs,v 1.1 2006/08/28 07:55:24 friedman Exp $
+# $Id: cvs-to-rcs,v 1.2 2015/10/15 17:30:16 friedman Exp $
 
 initialize()
 {
@@ -154,6 +154,11 @@ finalize()
 
 ######
 #####
+
+cvs()
+{
+    command cvs -z3 "$@"
+}
 
 cvs_init()
 {
