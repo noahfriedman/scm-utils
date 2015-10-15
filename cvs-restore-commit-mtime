@@ -1,12 +1,12 @@
 #!/bin/sh
-# $Id$
+# $Id: cvs-restore-commit-mtime,v 1.1 2015/10/15 22:39:27 friedman Exp $
 
 timestamps()
 {
     cvs -z3 -q log -N -r "$@" |
         sed -n \
             -e '/^Working file: \(.*\)/{s//\1/;h;}' \
-            -e '/date: \([0-9-]* [0-9:]*\)[^;]*;.*/{s//\1/;G;s/\n/	/p;}'
+            -e '/date: \([0-9\/-]* [0-9:]*\)[^;]*;.*/{s//\1/;G;s/\n/	/p;}'
 }
 
 
