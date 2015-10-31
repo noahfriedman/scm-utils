@@ -1,0 +1,22 @@
+#!/bin/sh
+# $Id$
+
+git_revno()
+{
+    git rev-list -n1 HEAD
+}
+
+main()
+{
+    cd "${1-.}" || exit $?
+
+    revno_old=`git_revno`
+    git pull --no-stat --all
+    revno_new=`git_revno`
+
+    git-restore-commit-mtime $revno_old..$revno_new
+}
+
+main "$@"
+
+# eof
