@@ -1,5 +1,5 @@
 #!/bin/sh
-# $Id$
+# $Id: git-update,v 1.1 2015/10/31 07:22:05 friedman Exp $
 
 git_revno()
 {
@@ -11,7 +11,7 @@ main()
     cd "${1-.}" || exit $?
 
     revno_old=`git_revno`
-    git pull --no-stat --all
+    git pull --rebase=preserve --no-stat --all
     revno_new=`git_revno`
 
     git-restore-commit-mtime $revno_old..$revno_new
