@@ -1,5 +1,5 @@
 #!/bin/sh
-# $Id: git-update,v 1.1 2015/10/31 07:22:05 friedman Exp $
+# $Id: git-update,v 1.2 2015/11/20 23:02:07 friedman Exp $
 
 git_revno()
 {
@@ -9,9 +9,12 @@ git_revno()
 main()
 {
     cd "${1-.}" || exit $?
+    case $2 in
+        --rebase ) rebase=--rebase=preserve ;;
+    esac
 
     revno_old=`git_revno`
-    git pull --rebase=preserve --no-stat --all
+    git pull $rebase --no-stat --all
     revno_new=`git_revno`
 
     git-restore-commit-mtime $revno_old..$revno_new
