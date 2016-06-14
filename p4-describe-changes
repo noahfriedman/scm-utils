@@ -4,7 +4,7 @@
 # Created: 2014-11-13
 # Public domain.
 
-# $Id$
+# $Id: p4-describe-changes,v 1.1 2014/11/15 00:21:42 friedman Exp $
 
 # Commentary:
 # Code:
@@ -21,6 +21,13 @@ use POSIX qw(strftime);
 
 use NF::P4cmd qw(:direct);
 
+use constant { FL_CHG   => 0,
+               FL_FILE  => 1,
+               FL_SREV  => 2,
+               FL_EREV  => 3,
+               FL_HOW   => 4,
+             };
+
 my %opt = ( traditional => 0, );
 
 sub parse_options
@@ -36,11 +43,20 @@ sub parse_options
     ( "D|debug"       => \$NF::P4cmd::DEBUG,
       "h|help+"       => \$help,
 
-      "t|traditional" => \$opt{traditional},
+      "t|traditional"  => \$opt{traditional},
+      "i|integrations" => \$opt{integs},
     );
 
   pod2usage (-exitstatus => 1, -verbose => 0)     unless $succ;
   pod2usage (-exitstatus => 0, -verbose => $help) if $help >= 0;
+
+  if ($opt{traditional} && $opt{integs})
+    {
+      (my $progname = $0) =~ s=.*/==;
+      pod2usage (-message => "$progname: --traditional and --integrations may not both be specified.\n",
+                 -exitval => 1,
+                 -verbose => 0);
+    }
 }
 
 sub get_changes
@@ -53,50 +69,187 @@ sub get_describe
   p4 (\@_, "describe", "-S", "-s");
 }
 
+sub get_filelog
+{
+  my $flist = shift;
+  my %flog;
+  for my $elt (p4 ($flist, qw(filelog -s)))
+    {
+      my $depotFile = $elt->{depotFile};
+      my $change    = $elt->{change}->[0];
+      my $rev       = $elt->{rev}->[0];
+
+      my @fdata = ($change);
+      if (exists $elt->{file})
+        {
+           $fdata[FL_FILE] = $elt->{file}->[0]->[0];
+          ($fdata[FL_SREV] = $elt->{srev}->[0]->[0]) =~ s/#//;
+          ($fdata[FL_EREV] = $elt->{erev}->[0]->[0]) =~ s/#//;
+           $fdata[FL_HOW]  = $elt->{how}->[0]->[0];
+        }
+      $flog{$depotFile}->{$rev} = \@fdata;
+    }
+  return \%flog;
+}
+
+sub integ_map
+{
+  my %change = map
+    { my @rev = @{$_->{rev}};
+      $_->{change} => { map { $_ => shift @rev } @{$_->{depotFile}} }
+    } @_;
+
+  my @flist;
+  map { while (my ($file, $rev) = each %$_)
+          {
+            push @flist, $file . "#=" . $rev;
+          }
+      } values %change;
+  my $filelog = get_filelog (\@flist);
+
+  undef @flist;
+  while (my ($depotFile, $elt) = each %$filelog)
+    {
+      while (my ($rev, $vals) = each %$elt)
+        {
+          next unless @$vals > 1;
+          push @flist, $vals->[FL_FILE] . "#=" . $vals->[FL_EREV];
+        }
+    }
+  if (@flist)
+    {
+      my $histmap = get_filelog (\@flist);
+      while (my ($depotFile, $elt) = each %$filelog)
+        {
+          while (my ($rev, $vals) = each %$elt)
+            {
+              next unless @$vals > 1;
+              my $file = $vals->[FL_FILE];
+              my $erev = $vals->[FL_EREV];
+              $vals->[FL_CHG] = $histmap->{$file}->{$erev}->[FL_CHG];
+            }
+        }
+    }
+
+  while (my ($changeno, $depotFile_tbl) = each %change)
+    {
+      while (my ($depotFile, $revno) = each %$depotFile_tbl)
+        {
+          $depotFile_tbl->{$depotFile} = { $revno => $filelog->{$depotFile}->{$revno} };
+        }
+    }
+  return \%change;
+}
+
+sub change_integs
+{
+  my ($tbl, $change) = @_;
+
+  my $depotFile_tbl = $tbl->{$change};
+  my %integs = ( map { map { @$_ > 1 ? ($_->[FL_CHG] => 1) : ();
+                           } values %$_;
+                     } values %$depotFile_tbl);
+  sort keys %integs;
+}
+
+sub integ_of
+{
+  my ($integs, $changeno, $file, $rev) = @_;
+
+  my $change_tbl = $integs->{$changeno};
+  return unless $change_tbl;
+
+  my $file_tbl = $change_tbl->{$file};
+  return unless $file_tbl;
+
+  my $rev_list = $file_tbl->{$rev};
+  return unless $rev_list && @$rev_list > 1;
+
+  my $chg  = $rev_list->[FL_CHG];
+  my $how  = $rev_list->[FL_HOW];
+  my $from = $rev_list->[FL_FILE];
+  my $srev = $rev_list->[FL_SREV];
+  my $erev = $rev_list->[FL_EREV];
+
+  my $range = "";
+  if ($srev ne 'none')
+    {
+      $srev++;
+      $range .= "#$srev," unless $erev eq $srev;
+    }
+  $range .= "#$erev";
+
+  return ($how, $chg, $from, $range);
+}
+
 # This is slightly different from the standard output from p4
 sub describe_change
 {
-  my $change = shift;
+  my ($change, $integs) = @_;
   return unless $change->{code} eq 'stat';  # todo: print error messages
 
-  my $stamp = strftime ("%Y-%m-%d %H:%M:%S%z", localtime ($change->{time}));
+  my $stamp = strftime ("%Y-%m-%d %H:%M:%S %z", localtime ($change->{time}));
 
   my $status = ($change->{status} eq 'submitted'
                 ? ""
                 : sprintf (" *%s*", $change->{status}));
 
-  printf("%s %d %s@%s %s%s\n\n",
+  my $changeno = $change->{change};
+  printf("%s %d  %s  %s@%s%s\n\n",
          (exists $change->{shelved} ? "Shelf" : "Change"),
-         $change->{change},
+         $changeno,
+         $stamp,
          $change->{user},
          $change->{client},
-         $stamp,
          $status);
 
   (my $desc = $change->{desc}) =~ s/^/\t/mg;
   print $desc, "\n";
 
-  map { printf("... %-4s  %-11s  %s\n",
-               '#' . shift @{$change->{rev}},
-               shift @{$change->{action}},
-               $_)
-      } @{$change->{depotFile}};
+  if ($integs)
+    {
+      my @integs = change_integs ($integs, $changeno);
+      print "\tIntegrated changes: @integs\n\n" if @integs;
+    }
+
+   my $tmpl = "\t%3s %-4s  %-11s  %s\n";
+   map { my $rev    = shift @{$change->{rev}};
+         my $action = shift @{$change->{action}};
+         my @integ;
+
+         printf($tmpl, '...', '#' . $rev, $action, $_);
+         if ($integs
+             && (@integ = integ_of ($integs, $changeno, $_, $rev)))
+           {
+             my $s = sprintf ("%s %s %s%s", @integ);
+             printf ($tmpl, '', '', $s, '');
+             print "\n";
+           }
+       } @{$change->{depotFile}};
   print "\n";
 }
-
 
 sub main
 {
   parse_options (\@_);
 
-  my @changelist = get_changes (@_);
+  my @changelist;
+  my @path;
+  map { if (/^\d+$/) { push @changelist, $_ }
+        else         { push @path,       $_ }
+      } @_;
+  push @changelist, get_changes (@path) if @path;
+
   if ($opt{traditional})
     {
       get_describe (@changelist);
     }
   else
     {
-      map { describe_change ($_) } get_describe (@changelist);
+      my @desc   = get_describe (@changelist);
+      my $integs = integ_map (@desc) if $opt{integs};
+
+      map { describe_change ($_, $integs) } @desc;
     }
 
   return $?;
@@ -117,7 +270,7 @@ __END__
      {-D|--debug}            {--p4user   USER}
      {-h|--help}             {--p4port   PORT}
      {-t|--traditional}      {--p4client CLIENT}
-                             {--p4dir    DIR}
+     {-i|--integrations}     {--p4dir    DIR}
                              {--p4host   HOST}
 
      (plus any args to pass to "p4 changes" to limit scope of results)
@@ -134,6 +287,14 @@ Long-format options may be abbreviated as long as the result is not ambiguous.
 
 Use builtin C<p4 describe> output format instead of slightly modified custom
 format implemented in this script.
+
+=item B<-i>, B<--integrations>
+
+Show which changes, if any, were integrated into each change and display
+which origin each submitted file was integrated, branched, copied, or
+merged from.
+
+This option is not compatible with the C<--traditional> option.
 
 =back
 
@@ -152,6 +313,8 @@ but with the same or easier-to-read results.
 The usual flags to C<p4 changes> work, e.g.
 
     p4-describe-changes -s pending -u noahf //depot/main/...
+
+    p4-describe-changes 962492
 
 Use the B<--p4*> options to override P4PORT, P4USER, etc.
 
