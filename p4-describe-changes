@@ -4,7 +4,7 @@
 # Created: 2014-11-13
 # Public domain.
 
-# $Id: p4-describe-changes,v 1.4 2016/06/15 04:31:06 friedman Exp $
+# $Id: p4-describe-changes,v 1.5 2016/06/15 04:37:32 friedman Exp $
 
 # Commentary:
 # Code:
@@ -389,8 +389,8 @@ sub main
       print dumpresult (\@changelist);
 
       @changelist = sort { ($opt{reverse}
-                            ? $b <=> $a
-                            : $a <=> $b);
+                            ? $a <=> $b
+                            : $b <=> $a);
                          } @changelist;
       p4 (\@changelist, qw(describe -s))
     }
@@ -401,8 +401,8 @@ sub main
 
       map { describe_change ($_, $integs)
           } sort { ($opt{reverse}
-                    ? $b->{change} <=> $a->{change}
-                    : $a->{change} <=> $b->{change});
+                    ? $a->{change} <=> $b->{change}
+                    : $b->{change} <=> $a->{change});
                  } @desc;
     }
 
@@ -441,8 +441,8 @@ them after the C<--> parameter to end this script's own option processing.
 
 =item B<-r>, B<--reverse>
 
-Display changes from newest to oldest.
-By default, changes are displayed from oldest to newest.
+Display changes from oldest to newest.
+By default, changes are displayed from newest to oldest.
 
 =item B<-t>, B<--traditional>
 
