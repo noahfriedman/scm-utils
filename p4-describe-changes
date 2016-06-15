@@ -4,7 +4,7 @@
 # Created: 2014-11-13
 # Public domain.
 
-# $Id: p4-describe-changes,v 1.6 2016/06/15 04:44:19 friedman Exp $
+# $Id: p4-describe-changes,v 1.7 2016/06/15 04:46:33 friedman Exp $
 
 # Commentary:
 # Code:
@@ -33,6 +33,7 @@ my %opt = ( traditional => 0,
             show_integs => 0,
             show_desc   => 1,
             show_files  => 1,
+            show_jobs   => 1,
             reverse     => 0,
           );
 
@@ -54,18 +55,23 @@ sub parse_options
       "i|integrations!" => \$opt{show_integs},
       "d|descriptions!" => \$opt{show_desc},
       "f|files!"        => \$opt{show_files},
+      "j|jobs!"         => \$opt{show_jobs},
       # The long options above are automatically negated
       "T"               => sub { $opt{traditional} = 0 },
       "I!"              => sub { $opt{show_integs} = 0 },
       "D"               => sub { $opt{show_desc}   = 0 },
       "F"               => sub { $opt{show_files}  = 0 },
+      "J"               => sub { $opt{show_jobs}  = 0 },
     );
 
   pod2usage (-exitstatus => 1, -verbose => 0)     unless $succ;
   pod2usage (-exitstatus => 0, -verbose => $help) if $help >= 0;
 
   if ($opt{traditional}
-      && ($opt{show_integs} || !$opt{show_desc} || !$opt{show_files}))
+      && ($opt{show_integs}
+          || !$opt{show_desc}
+          || !$opt{show_files}
+          || !$opt{show_jobs}))
     {
       (my $progname = $0) =~ s=.*/==;
       pod2usage (-message => "$progname: --traditional may not be used with any other formatting options.\n",
@@ -184,6 +190,7 @@ sub integ_map
   for my $elt (@_)
     {
       next if p4error ($elt);
+      next unless exists $elt->{rev};  # no files in change
 
       my $change    = $elt->{change};
       my $depotFile = $elt->{depotFile};
@@ -346,6 +353,19 @@ sub describe_change
       print $desc, "\n";
     }
 
+  if ($opt{show_jobs} && exists $change->{job})
+    {
+      my ($job, $jst) = ($change->{job}, $change->{jobstat});
+      my @joblist;
+      for (my $i = 0; $i < @$job; $i++)
+        {
+          my ($j, $s) = ($job->[$i], $jst->[$i]);
+          $j .= sprintf ("(*%s*)", $s) unless $s eq 'fixed';
+          push @joblist, $j;
+        }
+      print "\tJobs: ", join (" ", @joblist), "\n\n";
+    }
+
   if ($integs)
     {
       my @integs = change_integs ($integs, $changeno);
@@ -419,12 +439,15 @@ __END__
 
 =head1 SYNOPSIS
 
-     {--debug}             {-?|-h|--help}            {--p4user   USER}
-     {-t|--traditional}    {-T|--no-traditional}     {--p4port   PORT}
-     {-i|--integrations}   {-I|--no-integrations}    {--p4client CLIENT}
-     {-d|--descriptions}   {-D|--no-descriptions}    {--p4dir    DIR}
-     {-f|--files}          {-F|--no-files}           {--p4host   HOST}
-     {-r|--reverse}
+     {--debug}             {-?|-h|--help}            {-r|--reverse}
+     {-t|--traditional}    {-T|--no-traditional}     {--p4user   USER}
+     {-i|--integrations}   {-I|--no-integrations}    {--p4port   PORT}
+     {-d|--descriptions}   {-D|--no-descriptions}    {--p4client CLIENT}
+     {-f|--files}          {-F|--no-files}           {--p4dir    DIR}
+     {-j|--jobs}           {-J|--no-jobs}            {--p4host   HOST}
+
+     ... changelists or files
+
 
  The -h option may be repeated up to 3 times for increased verbosity.
 
@@ -463,6 +486,10 @@ Display the description of the change.  This is the default.
 
 Display the files associated with the change.  This is the default.
 
+=item B<-j>, B<--jobs>
+
+Display the job names fixed by the change.  This is the default.
+
 =back
 
 The inverse options are as follows.
@@ -489,6 +516,10 @@ Do not display the files associated with each change.
 If this option is combined with B<--integrations>, the output will include
 a list of the integrated changes but will not display the individual files
 from those changes.
+
+=item B<-J>, B<--no-jobs>
+
+Do not display job names fixed by the change.
 
 =back
 
