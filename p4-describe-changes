@@ -4,7 +4,7 @@
 # Created: 2014-11-13
 # Public domain.
 
-# $Id: p4-describe-changes,v 1.3 2016/06/14 23:22:59 friedman Exp $
+# $Id: p4-describe-changes,v 1.4 2016/06/15 04:31:06 friedman Exp $
 
 # Commentary:
 # Code:
@@ -193,7 +193,7 @@ sub integ_map
           # Shelved files are a hairy mess.
           # Get the fstat information and if there is any, then for each file
           # that has a revision of "none", replace the element in %change
-          # with the fstat information And call that revision #1.
+          # with the fstat information and call that revision #1.
 
           my $fstat = $shelve{$change} = get_shelved_fstat ($change);
           my $rev = $elt->{rev};
