@@ -4,7 +4,7 @@
 # Created: 2014-11-13
 # Public domain.
 
-# $Id: p4-describe-changes,v 1.5 2016/06/15 04:37:32 friedman Exp $
+# $Id: p4-describe-changes,v 1.6 2016/06/15 04:44:19 friedman Exp $
 
 # Commentary:
 # Code:
@@ -386,8 +386,6 @@ sub main
 
   if ($opt{traditional})
     {
-      print dumpresult (\@changelist);
-
       @changelist = sort { ($opt{reverse}
                             ? $a <=> $b
                             : $b <=> $a);
