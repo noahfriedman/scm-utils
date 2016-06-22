@@ -1,0 +1,198 @@
+#!/usr/bin/env perl
+# $Id$
+
+package REST::Swarm;
+
+use strict;
+use warnings qw(all);
+
+use REST::Client;
+use JSON;
+use Carp qw(verbose croak);
+
+sub new
+{
+  my $type = shift;
+  my $class = ref ($type) || $type;
+  my $self = bless {}, $class;
+
+  $self->{json} = JSON->new->pretty->canonical;
+
+  if (@_) # process any remaining args as key/value pairs
+    {
+      my %defaults = @_;
+      while (my ($key, $val) = each %defaults)
+        {
+          $self->{attr}->{$key} = $val;
+        }
+    }
+
+  my $host = $self->{attr}->{host};
+  $self->{client} = REST::Client->new (host => $host);
+
+  return $self;
+}
+
+sub json_encode { my $self = shift; $self->{json}->encode (@_); }
+sub json_decode { my $self = shift; $self->{json}->decode (@_); }
+
+sub urlencode_args
+{
+  my $self = shift;
+  my %args = @_;
+
+  my @kv;
+  while (my ($key, $val) = each %args)
+    {
+      if (ref $val eq 'ARRAY')
+        {
+          push @kv, map { s/([^0-9a-zA-Z_,.])/sprintf ("%%%02X", ord($1))/eg;
+                          "${key}[]=$_"
+                        } @$val;
+        }
+      else
+        {
+          $val =~ s/([^0-9a-zA-Z_,.])/sprintf ("%%%02X", ord($1))/eg;
+          push @kv, "$key=$val";
+        }
+    }
+  join ("&", sort @kv);
+}
+
+sub GET
+{
+  my ($self, $path, %args) = @_;
+
+  my $query = $self->urlencode_args (%args);
+  $path .= "?$query" if defined $query && $query ne "";
+
+  my $client  = $self->{client};
+  my $headers = { 'Content-Type'   => 'application/json',
+                  Accept           => 'application/json',
+                };
+
+  $client->GET ($path, $headers);
+  my $code     = $client->responseCode;
+  my $type     = $client->responseHeader ('Content-Type');
+  my $response = $client->responseContent;
+
+  croak $response unless $type =~ m=application/json=i;
+
+  my $json    = $self->{json};
+  my $decoded = $json->decode ($response);
+
+  unless ($code == 200)
+    {
+      croak sprintf ("%d Error %s: %s\n", $code, $path, $decoded->{error})
+        if exists $decoded->{error};
+      croak sprintf ("%d Error on query: %s\n", $code, $path);
+    }
+
+  return $decoded;
+}
+
+sub search
+{
+  my ($self, %args) = @_;
+
+  my $result = $self->GET ("/api/v1.2/reviews/", %args);
+  my @review = @{$result->{reviews}};
+  return \@review;
+}
+
+sub review
+{
+  my ($self, $id, %args) = @_;
+
+  my $result = $self->GET ("/api/v1.2/reviews/$id", %args);
+  my @review = $result->{review};
+  return \@review;
+}
+
+
+package main;
+
+use strict;
+use warnings qw(all);
+
+my $swarm_host = 'http://swarm.perforce.com';
+
+sub parse_review
+{
+  my ($found, $list) = @_;
+
+  for my $review (@$list)
+    {
+      my $id = $review->{id};
+      next if exists $found->{$id};
+
+      my $changes = $review->{changes};
+      my $commits = $review->{commits};
+      my $f = $found->{$id} = {};
+
+      $f->{orig} = shift @$changes;
+      if (defined $commits)
+        {
+          my $last = pop @$changes;
+          my $final = $commits->[0];
+
+          push @$changes, $final if $final != $last;
+          $f->{commits} = $final;
+        }
+
+      $f->{intermed} = $changes if @$changes;
+    }
+}
+
+sub main
+{
+  unless (@_)
+    {
+      print STDERR "You must provide review or shelf numbers!\n";
+      exit 1;
+    }
+
+  my $swarm = REST::Swarm->new ( host => $swarm_host );
+  my @fields = (fields => [qw(id changes commits)]);
+
+  my %found;
+
+  my $reviews = $swarm->search (@fields, change => \@_);
+  if ($reviews && @$reviews)
+    {
+      my %need = (map { $_ => undef } @_);
+      map { map { map { delete $need{$_}
+                      } (ref $_ ? @$_ : $_)
+                } values %$_
+          } @$reviews;
+
+      parse_review (\%found, $reviews);
+
+      for my $id (keys %need)
+        {
+          # don't croak on errors; usually 404
+          my $result = eval { $swarm->review ($id, @fields) };
+          if ($result && @$result)
+            {
+              map { map { delete $need{$_} } keys %$_ } @$result;
+              parse_review (\%found, $result);
+            }
+        }
+
+      map { print STDERR "$_: no Swarm reference found.\n" } sort keys %need;
+      print STDERR "\n" if %need;
+    }
+
+  map { my $data = $found{$_};
+        printf "%s/reviews/%s\n", $swarm_host, $_;
+        printf "\tUser shelf:   %s\n", $data->{orig};
+        printf "\tIntermediate: %s\n", join (" ", @{$data->{intermed}})
+          if $data->{intermed};
+        printf "\tCommitted:    %s\n", $data->{commits} if ($data->{commits});
+        print "\n";
+      } sort keys %found;
+}
+
+main (@ARGV);
+
+# eof
