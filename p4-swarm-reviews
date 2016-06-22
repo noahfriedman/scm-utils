@@ -1,5 +1,5 @@
 #!/usr/bin/env perl
-# $Id$
+# $Id: p4-swarm-reviews,v 1.1 2016/06/22 22:01:20 friedman Exp $
 
 package REST::Swarm;
 
@@ -155,12 +155,12 @@ sub main
   my $swarm = REST::Swarm->new ( host => $swarm_host );
   my @fields = (fields => [qw(id changes commits)]);
 
+  my %need = (map { $_ => undef } @_);
   my %found;
 
   my $reviews = $swarm->search (@fields, change => \@_);
   if ($reviews && @$reviews)
     {
-      my %need = (map { $_ => undef } @_);
       map { map { map { delete $need{$_}
                       } (ref $_ ? @$_ : $_)
                 } values %$_
@@ -178,10 +178,10 @@ sub main
               parse_review (\%found, $result);
             }
         }
-
-      map { print STDERR "$_: no Swarm reference found.\n" } sort keys %need;
-      print STDERR "\n" if %need;
     }
+
+  map { print STDERR "$_: no Swarm reference found.\n" } sort keys %need;
+  print STDERR "\n" if %need;
 
   map { my $data = $found{$_};
         printf "%s/reviews/%s\n", $swarm_host, $_;
