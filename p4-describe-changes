@@ -4,7 +4,7 @@
 # Created: 2014-11-13
 # Public domain.
 
-# $Id: p4-describe-changes,v 1.7 2016/06/15 04:46:33 friedman Exp $
+# $Id: p4-describe-changes,v 1.8 2016/06/15 18:44:19 friedman Exp $
 
 # Commentary:
 # Code:
@@ -347,10 +347,11 @@ sub describe_change
          $change->{client},
          $status);
 
-  if ($opt{show_desc})
+  if ($opt{show_desc} && $change->{desc} ne '')
     {
       (my $desc = $change->{desc}) =~ s/^/\t/mg;
       print $desc, "\n";
+      print "\n" unless $desc =~ /\n$/s;
     }
 
   if ($opt{show_jobs} && exists $change->{job})
