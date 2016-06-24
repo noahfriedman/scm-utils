@@ -1,14 +1,22 @@
 #!/usr/bin/env perl
-# $Id: p4-swarm-reviews,v 1.1 2016/06/22 22:01:20 friedman Exp $
+# $Id: p4-swarm-reviews,v 1.2 2016/06/22 22:07:12 friedman Exp $
 
 package REST::Swarm;
 
 use strict;
 use warnings qw(all);
 
+use Carp  qw(verbose croak);
 use REST::Client;
 use JSON;
-use Carp qw(verbose croak);
+
+sub __DEBUG (&)
+{
+  return unless $ENV{SWARM_REVIEWS_DEBUG};
+  my $fn = shift;
+  eval { &$fn };
+  print STDERR "\n", $@ if $@;
+}
 
 sub new
 {
@@ -66,6 +74,12 @@ sub GET
   my $query = $self->urlencode_args (%args);
   $path .= "?$query" if defined $query && $query ne "";
 
+  __DEBUG { my $host = $self->{attr}->{host};
+            print(STDERR "#" x 40,
+                  " $self\->GET() entry\n\n",
+                  "URL: $host$path\n\n")
+          };
+
   my $client  = $self->{client};
   my $headers = { 'Content-Type'   => 'application/json',
                   Accept           => 'application/json',
@@ -75,6 +89,12 @@ sub GET
   my $code     = $client->responseCode;
   my $type     = $client->responseHeader ('Content-Type');
   my $response = $client->responseContent;
+
+  __DEBUG { print(STDERR "HEADERS: (http result $code)\n",
+                  (map { sprintf ("   %s: %s\n", $_,
+                                  $client->responseHeader ($_));
+                       } $client->responseHeaders), "\n");
+          };
 
   croak $response unless $type =~ m=application/json=i;
 
@@ -87,6 +107,11 @@ sub GET
         if exists $decoded->{error};
       croak sprintf ("%d Error on query: %s\n", $code, $path);
     }
+
+  __DEBUG { print(STDERR "RESULT: ",
+                  $json->encode ($decoded),
+                  "\n", "#" x 40, " $self\->GET() exit\n\n");
+          };
 
   return $decoded;
 }
@@ -115,33 +140,58 @@ package main;
 use strict;
 use warnings qw(all);
 
+use POSIX qw(strftime);
+
 my $swarm_host = 'http://swarm.perforce.com';
+
+my @swarm_fields = (qw(id
+                       changes commits commitStatus
+                       created updated
+                       state pending));
+
+sub timefmt
+{
+  strftime ("%Y-%m-%d %H:%M:%S %z", localtime ($_[0]));
+}
 
 sub parse_review
 {
   my ($found, $list) = @_;
 
+  my %special = map { $_ => undef } (qw(id changes commits));
   for my $review (@$list)
     {
       my $id = $review->{id};
       next if exists $found->{$id};
 
+      my $f = $found->{$id} = {};
+      map { $f->{$_} = $review->{$_}
+              unless exists $special{$_};
+          } keys %$review;
+
       my $changes = $review->{changes};
       my $commits = $review->{commits};
-      my $f = $found->{$id} = {};
-
-      $f->{orig} = shift @$changes;
-      if (defined $commits)
+      $f->{orig}  = shift @$changes;
+      if (defined $commits && @$commits)
         {
-          my $last = pop @$changes;
-          my $final = $commits->[0];
+          $f->{commits} = $commits;
 
-          push @$changes, $final if $final != $last;
-          $f->{commits} = $final;
+          # Remove any numbers that appear in in commits from changes
+          my %rem = map { $_ => undef } @$changes;
+          map { delete $rem{$_} } @$commits;
+          $changes = [sort keys %rem];
         }
-
-      $f->{intermed} = $changes if @$changes;
+      $f->{changes} = $changes if @$changes;
     }
+}
+
+sub prune_needed
+{
+  my ($need, $reviews) = @_;
+  map { map { map { delete $need->{$_}
+                  } (ref $_ eq 'ARRAY' ? @$_ : $_);
+            } values %$_;
+      } @$reviews;
 }
 
 sub main
@@ -153,30 +203,28 @@ sub main
     }
 
   my $swarm = REST::Swarm->new ( host => $swarm_host );
-  my @fields = (fields => [qw(id changes commits)]);
 
   my %need = (map { $_ => undef } @_);
   my %found;
 
+  my @fields = (fields => \@swarm_fields);
   my $reviews = $swarm->search (@fields, change => \@_);
   if ($reviews && @$reviews)
     {
-      map { map { map { delete $need{$_}
-                      } (ref $_ ? @$_ : $_)
-                } values %$_
-          } @$reviews;
-
+      prune_needed (\%need, $reviews);
       parse_review (\%found, $reviews);
+    }
 
-      for my $id (keys %need)
+  for my $id (keys %need)
+    {
+      # don't croak on errors; usually 404
+      my $result = eval { $swarm->review ($id, @fields) };
+      print STDERR $@ if $ENV{SWARM_REVIEWS_DEBUG};
+
+      if ($result && @$result)
         {
-          # don't croak on errors; usually 404
-          my $result = eval { $swarm->review ($id, @fields) };
-          if ($result && @$result)
-            {
-              map { map { delete $need{$_} } keys %$_ } @$result;
-              parse_review (\%found, $result);
-            }
+          prune_needed (\%need,  $result);
+          parse_review (\%found, $result);
         }
     }
 
@@ -185,10 +233,24 @@ sub main
 
   map { my $data = $found{$_};
         printf "%s/reviews/%s\n", $swarm_host, $_;
-        printf "\tUser shelf:   %s\n", $data->{orig};
-        printf "\tIntermediate: %s\n", join (" ", @{$data->{intermed}})
-          if $data->{intermed};
-        printf "\tCommitted:    %s\n", $data->{commits} if ($data->{commits});
+        printf "\tUser shelf:    %s\n", $data->{orig};
+
+        printf "\tSwarm changes: %s\n", join (" ", @{$data->{changes}})
+          if $data->{changes};
+
+        printf "\tCommitted:     %s\n", join (" ", @{$data->{commits}})
+          if $data->{commits};
+
+        printf "\tCommit Error:  %s\n", $data->{commitStatus}->{error}
+          if (defined $data->{commitStatus}
+              && ref $data->{commitStatus} eq 'HASH'
+              && defined $data->{commitStatus}->{error});
+
+        printf "\tState:         %s%s\n", $data->{state},
+          ($data->{pending} ? ", pending" : "");
+
+        printf "\tCreated:       %s\n", timefmt ($data->{created});
+        printf "\tUpdate:        %s\n", timefmt ($data->{updated});
         print "\n";
       } sort keys %found;
 }
