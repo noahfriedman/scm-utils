@@ -1,5 +1,5 @@
 #!/usr/bin/env perl
-# $Id: p4-swarm-reviews,v 1.4 2016/07/01 06:12:30 friedman Exp $
+# $Id: p4-swarm-reviews,v 1.5 2016/07/01 19:25:13 friedman Exp $
 
 package REST::Generic;
 
@@ -468,36 +468,46 @@ sub main
   STDOUT->autoflush(1);
   STDERR->autoflush(1);
 
-  my @l;
+  my @list;
   for my $arg (@_)
     {
-      if ($arg =~ /^\d+$/) { push @l, $arg }
+      if ($arg =~ /^\d+$/)
+        { push @list, $arg }
       else
         {
-          eval { push @l, jira_issue_reviews ($arg) };
-          print STDERR "$arg: ", $@, "\n" if $@;
+          my @result = eval { jira_issue_reviews ($arg) };
+          if ($@) { print STDERR "$arg: ", $@, "\n" }
+          elsif (scalar @result == 0)
+            { print STDERR "$arg: no reviews found for this issue.\n" }
+          else
+            { push @list, @result }
         }
     }
-  @_ = @l;
 
-  unless (@_)
+  unless (@list)
     {
-      print STDERR "You must provide review/shelf numbers or jira tasks!\n";
+      if (@_)
+        { print STDERR "No results to display.\n" }
+      else
+        { print STDERR "You must provide review/shelf numbers or jira tasks!\n" }
       exit 1;
     }
 
   my $swarm = REST::Swarm->new ( host => $swarm_host );
-  my %need = (map { $_ => undef } @_);
+  my %need = (map { $_ => undef } @list);
   my %found;
 
-  search ($swarm, \%need, \%found, \@review_fields, ids => \@_);
+  search ($swarm, \%need, \%found, \@review_fields, ids => \@list);
   search ($swarm, \%need, \%found, \@review_fields, change => [keys %need])
     if %need;
 
   my @stream = map { "review-$_" } sort keys %found;
-  my $activity = $swarm->activity (fields => \@activity_fields,
-                                   stream => \@stream);
-  parse_activity (\%found, $activity);
+  if (@stream)
+    {
+      my $activity = $swarm->activity (fields => \@activity_fields,
+                                       stream => \@stream);
+      parse_activity (\%found, $activity);
+    }
 
   map { print STDERR "$_: no Swarm reference found.\n" } sort keys %need;
   print STDERR "\n" if %need;
