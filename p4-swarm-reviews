@@ -1,7 +1,7 @@
 #!/usr/bin/env perl
-# $Id: p4-swarm-reviews,v 1.3 2016/06/24 00:59:52 friedman Exp $
+# $Id: p4-swarm-reviews,v 1.4 2016/07/01 06:12:30 friedman Exp $
 
-package REST::Swarm;
+package REST::Generic;
 
 use strict;
 use warnings qw(all);
@@ -9,8 +9,6 @@ use warnings qw(all);
 use Carp  qw(verbose croak);
 use REST::Client;
 use JSON;
-
-our $api_version = 'v2'; # 'v1.2'
 
 sub __DEBUG (&)
 {
@@ -40,13 +38,76 @@ sub new
   my $host = $self->{attr}->{host};
   $self->{client} = REST::Client->new (host => $host);
 
-  $self->{list_array}->{fields} = 1; # currently true for all swarm rest calls
-
   return $self;
 }
 
-sub json_encode { my $self = shift; $self->{json}->encode (@_); }
-sub json_decode { my $self = shift; $self->{json}->decode (@_); }
+sub json_encode { my $self = shift; $self->{json}->encode (@_) }
+sub json_decode { my $self = shift; $self->{json}->decode (@_) }
+
+# By default we do no auth; return void.
+sub http_auth_token { return }
+
+sub _http_send_headers
+{
+  my $self = shift;
+
+  return  { 'Content-Type'   => 'application/json',
+            Accept           => 'application/json',
+            $self->http_auth_token,
+          };
+}
+
+sub GET
+{
+  my ($self, $path, %args) = @_;
+
+  my $query = $self->urlencode_args (%args);
+  $path .= "?$query" if defined $query && $query ne "";
+
+  __DEBUG { my $host = $self->{attr}->{host};
+            print(STDERR "#" x 40,
+                  " $self\->GET() entry\n\n",
+                  "URL: $host$path\n\n")
+          };
+
+  my $client  = $self->{client};
+  my $headers = $self->_http_send_headers;
+
+  $client->GET ($path, $headers);
+  my $code     = $client->responseCode;
+  my $type     = $client->responseHeader ('Content-Type');
+  my $response = $client->responseContent;
+
+  __DEBUG { print(STDERR "HEADERS: (http result $code)\n",
+                  (map { sprintf ("   %s: %s\n", $_,
+                                  $client->responseHeader ($_));
+                       } $client->responseHeaders), "\n");
+          };
+
+  croak $response unless $type =~ m=application/json=i;
+
+  my $json    = $self->{json};
+  my $decoded = $json->decode ($response);
+
+  unless ($code == 200)
+    {
+      if (exists $decoded->{errorMessages}) # jira
+        { croak sprintf ("Error: %s\n", join ("\n", @{$decoded->{errorMessages}})) }
+      elsif (exists $decoded->{message})     # jira
+        { croak sprintf ("Error %s: %s\n", $decoded->{'status-code'}, $decoded->{message}) }
+      elsif (exists $decoded->{error})     # swarm
+        { croak sprintf ("Error %s: %s\n", $path, $decoded->{error}) }
+      else
+        { croak sprintf ("Error on query: %s\n", $path) }
+    }
+
+  __DEBUG { print(STDERR "RESULT: ",
+                  $json->encode ($decoded),
+                  "\n", "#" x 40, " $self\->GET() exit\n\n");
+          };
+
+  return $decoded;
+}
 
 sub urlencode_args
 {
@@ -58,7 +119,8 @@ sub urlencode_args
     {
       if (ref $val eq 'ARRAY')
         {
-          if (exists $self->{list_array}->{$key})
+          if (exists    $self->{list_array}->{__ALL}
+              || exists $self->{list_array}->{$key})
             {
               my $list = join (",", @$val);
               $list =~ s/([^---0-9a-zA-Z_,.])/sprintf ("%%%02X", ord($1))/eg;
@@ -80,53 +142,24 @@ sub urlencode_args
   join ("&", sort @kv);
 }
 
-sub GET
+
+package REST::Swarm;
+
+use strict;
+use warnings qw(all);
+
+use base qw(REST::Generic);
+
+our $api_version = 'v2'; # 'v1.2'
+
+sub new
 {
-  my ($self, $path, %args) = @_;
+  my $type = shift;
+  my $class = ref ($type) || $type;
+  my $self = $class->SUPER::new (@_);
 
-  my $query = $self->urlencode_args (%args);
-  $path .= "?$query" if defined $query && $query ne "";
-
-  __DEBUG { my $host = $self->{attr}->{host};
-            print(STDERR "#" x 40,
-                  " $self\->GET() entry\n\n",
-                  "URL: $host$path\n\n")
-          };
-
-  my $client  = $self->{client};
-  my $headers = { 'Content-Type'   => 'application/json',
-                  Accept           => 'application/json',
-                };
-
-  $client->GET ($path, $headers);
-  my $code     = $client->responseCode;
-  my $type     = $client->responseHeader ('Content-Type');
-  my $response = $client->responseContent;
-
-  __DEBUG { print(STDERR "HEADERS: (http result $code)\n",
-                  (map { sprintf ("   %s: %s\n", $_,
-                                  $client->responseHeader ($_));
-                       } $client->responseHeaders), "\n");
-          };
-
-  croak $response unless $type =~ m=application/json=i;
-
-  my $json    = $self->{json};
-  my $decoded = $json->decode ($response);
-
-  unless ($code == 200)
-    {
-      croak sprintf ("%d Error %s: %s\n", $code, $path, $decoded->{error})
-        if exists $decoded->{error};
-      croak sprintf ("%d Error on query: %s\n", $code, $path);
-    }
-
-  __DEBUG { print(STDERR "RESULT: ",
-                  $json->encode ($decoded),
-                  "\n", "#" x 40, " $self\->GET() exit\n\n");
-          };
-
-  return $decoded;
+  $self->{list_array}->{fields} = 1; # currently true for all swarm rest calls
+  return $self;
 }
 
 sub search
@@ -156,6 +189,70 @@ sub activity
 }
 
 
+package REST::Jira;
+
+use strict;
+use warnings qw(all);
+
+use MIME::Base64;
+
+use base qw(REST::Generic);
+
+our $api_version = 2;
+
+sub new
+{
+  my $type = shift;
+  my $class = ref ($type) || $type;
+  my $self = $class->SUPER::new (@_);
+
+  $self->{list_array}->{__ALL} = 1;
+  return $self;
+}
+
+sub http_auth_token
+{
+  my $self = shift;
+
+  my $user  = $self->{attr}->{user} || "anonymous";
+  my $pass  = $self->{attr}->{pass} || "";
+  my $basic = encode_base64 (sprintf ("%s:%s", $user, $pass));
+
+  return (Authorization => sprintf ("Basic %s", $basic));
+}
+
+sub search
+{
+  my ($self, %args) = @_;
+
+  my $max = $args{maxResults};  # may be undef
+  # Raise the default from 50 to 1000 if caller did not specify.
+  $args{maxResults} ||= 1000;
+  $args{startAt}      =    0;  # always start at 0
+
+  my @issues;
+  while (1)
+    {
+      my $result = $self->POST ("/rest/api/$api_version/search", %args);
+      push @issues, @{$result->{issues}};
+
+      $max = $result->{total} unless defined $max;
+      last if @issues >= $max;
+      $args{startAt} = scalar @issues; # fetch next batch;
+    }
+  return \@issues;
+}
+
+sub issue_remotelinks
+{
+  my ($self, $issue, %args) = @_;
+
+  my $path = "/rest/api/$api_version/issue/$issue/remotelink";
+  my $result = $self->GET ($path, %args);
+  return $result;
+}
+
+
 #package P4::Swarm;
 
 #use strict;
@@ -181,6 +278,9 @@ use warnings qw(all);
 use POSIX qw(strftime);
 
 my $swarm_host = 'http://swarm.perforce.com';
+my $jira_host  = 'http://jira.perforce.com:8080';
+my $jira_user  = 'build';
+my $jira_pass  = 'rein4ce';
 
 my @review_fields   = (qw(id author
                           changes commits commitStatus
@@ -344,18 +444,47 @@ sub search
     }
 }
 
+sub jira_issue_reviews
+{
+  my $jira = REST::Jira->new (host => $jira_host,
+                              user => $jira_user,
+                              pass => $jira_pass,
+                             );
+
+  my $result = $jira->issue_remotelinks (@_);
+  my @review;
+  for my $remote (@$result)
+    {
+      next unless $remote->{object}->{url} =~ m=/reviews/(\d+)=;
+      push @review, $1;
+    }
+  return @review;
+}
+
 sub main
 {
-  unless (@_)
-    {
-      print STDERR "You must provide review or shelf numbers!\n";
-      exit 1;
-    }
-
   # This only matters when output is not to a tty, but it keeps any errors
   # synchronized with regular output.
   STDOUT->autoflush(1);
   STDERR->autoflush(1);
+
+  my @l;
+  for my $arg (@_)
+    {
+      if ($arg =~ /^\d+$/) { push @l, $arg }
+      else
+        {
+          eval { push @l, jira_issue_reviews ($arg) };
+          print STDERR "$arg: ", $@, "\n" if $@;
+        }
+    }
+  @_ = @l;
+
+  unless (@_)
+    {
+      print STDERR "You must provide review/shelf numbers or jira tasks!\n";
+      exit 1;
+    }
 
   my $swarm = REST::Swarm->new ( host => $swarm_host );
   my %need = (map { $_ => undef } @_);
