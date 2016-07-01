@@ -1,5 +1,5 @@
 #!/usr/bin/env perl
-# $Id: p4-swarm-reviews,v 1.5 2016/07/01 19:25:13 friedman Exp $
+# $Id: p4-swarm-reviews,v 1.6 2016/07/01 19:38:54 friedman Exp $
 
 package REST::Generic;
 
@@ -282,7 +282,7 @@ my $jira_host  = 'http://jira.perforce.com:8080';
 my $jira_user  = 'build';
 my $jira_pass  = 'rein4ce';
 
-my @review_fields   = (qw(id author
+my @review_fields   = (qw(id author description
                           changes commits commitStatus
                           created updated
                           state pending));
@@ -298,7 +298,7 @@ sub parse_review
 {
   my ($found, $list) = @_;
 
-  my %special = map { $_ => undef } (qw(id changes commits));
+  my %special = map { $_ => undef } (qw(id changes commits description));
   for my $review (@$list)
     {
       my $id = $review->{id};
@@ -328,6 +328,10 @@ sub parse_review
           # Someone requested a review of a commit already made, not a shelf.
           push @{$f->{commit_by}}, [ $f->{commits}->[0], $f->{author} ];
         }
+
+      $f->{jira} = $1
+        if (defined $review->{description}
+          && $review->{description} =~ m=(https?://\S*jira\S*/browse/[---a-z0-9]+)=i)
     }
 }
 
@@ -402,6 +406,8 @@ sub print_review
 
   printf "%s/reviews/%s\n", $swarm_host, $id;
 
+  printr ("JIRA", $1) if $data->{jira} && $data->{jira} =~ m=.*/(.*)$=;
+
   printr ("Requested by", $data->{review_for})
     if $data->{review_for} && $data->{review_for} ne $data->{author};
 
@@ -430,6 +436,7 @@ sub print_review
 
   printr ("Created", timefmt ($data->{created}));
   printr ("Updated", timefmt ($data->{updated}));
+
   print "\n";
 }
 
