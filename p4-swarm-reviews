@@ -1,5 +1,5 @@
 #!/usr/bin/env perl
-# $Id: p4-swarm-reviews,v 1.2 2016/06/22 22:07:12 friedman Exp $
+# $Id: p4-swarm-reviews,v 1.3 2016/06/24 00:59:52 friedman Exp $
 
 package REST::Swarm;
 
@@ -9,6 +9,8 @@ use warnings qw(all);
 use Carp  qw(verbose croak);
 use REST::Client;
 use JSON;
+
+our $api_version = 'v2'; # 'v1.2'
 
 sub __DEBUG (&)
 {
@@ -38,6 +40,8 @@ sub new
   my $host = $self->{attr}->{host};
   $self->{client} = REST::Client->new (host => $host);
 
+  $self->{list_array}->{fields} = 1; # currently true for all swarm rest calls
+
   return $self;
 }
 
@@ -54,9 +58,18 @@ sub urlencode_args
     {
       if (ref $val eq 'ARRAY')
         {
-          push @kv, map { s/([^0-9a-zA-Z_,.])/sprintf ("%%%02X", ord($1))/eg;
-                          "${key}[]=$_"
-                        } @$val;
+          if (exists $self->{list_array}->{$key})
+            {
+              my $list = join (",", @$val);
+              $list =~ s/([^---0-9a-zA-Z_,.])/sprintf ("%%%02X", ord($1))/eg;
+              push @kv, "$key=$list";
+            }
+          else
+            {
+              push @kv, map { s/([^---0-9a-zA-Z_,.])/sprintf ("%%%02X", ord($1))/eg;
+                              "${key}[]=$_"
+                            } @$val;
+            }
         }
       else
         {
@@ -120,19 +133,44 @@ sub search
 {
   my ($self, %args) = @_;
 
-  my $result = $self->GET ("/api/v1.2/reviews/", %args);
-  my @review = @{$result->{reviews}};
-  return \@review;
+  my $result = $self->GET ("/api/$api_version/reviews/", %args);
+  return $result->{reviews};
 }
 
-sub review
+sub activity
 {
-  my ($self, $id, %args) = @_;
+  my ($self, %args) = @_;
 
-  my $result = $self->GET ("/api/v1.2/reviews/$id", %args);
-  my @review = $result->{review};
-  return \@review;
+  my @all;
+  while (1)
+    {
+      # This query will only return 100 results max at a time.
+      my $result = $self->GET ("/api/$api_version/activity/", %args);
+      push @all, @{$result->{activity}};
+
+      my $len = scalar @{$result->{activity}};
+      last unless $len >= 100;
+      $args{after} = $result->{lastSeen};
+    }
+  return \@all;
 }
+
+
+#package P4::Swarm;
+
+#use strict;
+#use warnings qw(all);
+
+#use NF::P4cmd;
+
+# Swarm stores data for a review N as a perforce user counter of the
+# form 'swarm-review-X' where X is the following transform of N.  This
+# value can be retrieved via "p4 counter -u KEY" or "p4 key KEY".
+#sub review_counter_name
+#{
+#  my $change = shift;
+#  sprintf ("swarm-review-%08x", 0xffffffff - $change);
+#}
 
 
 package main;
@@ -144,14 +182,16 @@ use POSIX qw(strftime);
 
 my $swarm_host = 'http://swarm.perforce.com';
 
-my @swarm_fields = (qw(id
-                       changes commits commitStatus
-                       created updated
-                       state pending));
+my @review_fields   = (qw(id author
+                          changes commits commitStatus
+                          created updated
+                          state pending));
+
+my @activity_fields = (qw(id action user change streams));
 
 sub timefmt
 {
-  strftime ("%Y-%m-%d %H:%M:%S %z", localtime ($_[0]));
+  strftime ("%Y-%m-%d %H:%M:%S %z (%a)", localtime ($_[0]));
 }
 
 sub parse_review
@@ -171,7 +211,6 @@ sub parse_review
 
       my $changes = $review->{changes};
       my $commits = $review->{commits};
-      $f->{orig}  = shift @$changes;
       if (defined $commits && @$commits)
         {
           $f->{commits} = $commits;
@@ -181,7 +220,50 @@ sub parse_review
           map { delete $rem{$_} } @$commits;
           $changes = [sort keys %rem];
         }
+      $f->{orig}  = shift @$changes if @$changes;
       $f->{changes} = $changes if @$changes;
+
+      if ($f->{commits} && ! $f->{orig})
+        {
+          # Someone requested a review of a commit already made, not a shelf.
+          push @{$f->{commit_by}}, [ $f->{commits}->[0], $f->{author} ];
+        }
+    }
+}
+
+sub parse_activity
+{
+  my ($found, $list) = @_;
+
+  for my $activity (@$list)
+    {
+      my $review;
+      for my $stream (@{$activity->{streams}})
+        {
+          if ($stream =~ /^review-(\d+)$/)
+            {
+              $review = $found->{$1};
+              last;
+            }
+        }
+      next unless defined $review;
+
+      my $action = $activity->{action};
+      my $fn = { committed => sub
+                 { push (@{$review->{commit_by}},
+                         [ $activity->{change}, $activity->{user} ]);
+                 },
+
+                 approved  => sub
+                 { push @{$review->{approved_by}}, $activity->{user} },
+
+                 requested => sub
+                 { $review->{review_for} = $activity->{user} },
+
+                 "updated files in" => sub
+                 { $review->{review_for} = $activity->{user} },
+               }->{$action} if defined $action;
+      &$fn if defined $fn;
     }
 }
 
@@ -194,6 +276,74 @@ sub prune_needed
       } @$reviews;
 }
 
+sub printr
+{
+  my $label = shift;
+
+  my @a = map { if (ref $_ eq 'ARRAY')
+                  {
+                    if (ref $_->[0] eq 'ARRAY')
+                      { map { sprintf ("%s (%s)", @$_) } @$_ }
+                    else
+                      { sprintf ("%s (%s)", @$_) }
+                  }
+                else
+                  { $_ }
+              } @_;
+
+  my $s = sprintf ("\t%-14s %s\n", $label, join (" ", @a));
+  substr ($s, length ($label) + 1, 1) = ":";
+  print $s;
+}
+
+sub print_review
+{
+  my ($id, $data) = @_;
+
+  printf "%s/reviews/%s\n", $swarm_host, $id;
+
+  printr ("Requested by", $data->{review_for})
+    if $data->{review_for} && $data->{review_for} ne $data->{author};
+
+  if ($data->{approved_by})
+    {
+      printr ("State", $data->{state},
+              sprintf ("(%s)", join (", ", @{$data->{approved_by}})),
+              ($data->{pending} ? "*pending*" : ()));
+    }
+  else
+    {
+      printr ("State", join (", ", $data->{state},
+                             ($data->{pending} ? "pending" : ())));
+    }
+
+  printr ("User shelf",    $data->{orig}, "($data->{author})") if $data->{orig};
+  if    ($data->{commit_by}) { printr ("Commits", $data->{commit_by}) }
+  elsif ($data->{commits})   { printr ("Commits", @{$data->{commits}}) }
+
+  printr ("Commit Error", $data->{commitStatus}->{error})
+    if (defined $data->{commitStatus}
+        && ref $data->{commitStatus} eq 'HASH'
+        && defined $data->{commitStatus}->{error});
+
+  printr ("Swarm intern", @{$data->{changes}}) if $data->{changes};
+
+  printr ("Created", timefmt ($data->{created}));
+  printr ("Updated", timefmt ($data->{updated}));
+  print "\n";
+}
+
+sub search
+{
+  my ($swarm, $need, $found, $fields) = (shift, shift, shift, shift);
+  my $reviews = $swarm->search (fields => $fields, @_);
+  if ($reviews && @$reviews)
+    {
+      prune_needed ($need, $reviews);
+      parse_review ($found, $reviews);
+    }
+}
+
 sub main
 {
   unless (@_)
@@ -202,57 +352,28 @@ sub main
       exit 1;
     }
 
-  my $swarm = REST::Swarm->new ( host => $swarm_host );
+  # This only matters when output is not to a tty, but it keeps any errors
+  # synchronized with regular output.
+  STDOUT->autoflush(1);
+  STDERR->autoflush(1);
 
+  my $swarm = REST::Swarm->new ( host => $swarm_host );
   my %need = (map { $_ => undef } @_);
   my %found;
 
-  my @fields = (fields => \@swarm_fields);
-  my $reviews = $swarm->search (@fields, change => \@_);
-  if ($reviews && @$reviews)
-    {
-      prune_needed (\%need, $reviews);
-      parse_review (\%found, $reviews);
-    }
+  search ($swarm, \%need, \%found, \@review_fields, ids => \@_);
+  search ($swarm, \%need, \%found, \@review_fields, change => [keys %need])
+    if %need;
 
-  for my $id (keys %need)
-    {
-      # don't croak on errors; usually 404
-      my $result = eval { $swarm->review ($id, @fields) };
-      print STDERR $@ if $ENV{SWARM_REVIEWS_DEBUG};
-
-      if ($result && @$result)
-        {
-          prune_needed (\%need,  $result);
-          parse_review (\%found, $result);
-        }
-    }
+  my @stream = map { "review-$_" } sort keys %found;
+  my $activity = $swarm->activity (fields => \@activity_fields,
+                                   stream => \@stream);
+  parse_activity (\%found, $activity);
 
   map { print STDERR "$_: no Swarm reference found.\n" } sort keys %need;
   print STDERR "\n" if %need;
 
-  map { my $data = $found{$_};
-        printf "%s/reviews/%s\n", $swarm_host, $_;
-        printf "\tUser shelf:    %s\n", $data->{orig};
-
-        printf "\tSwarm changes: %s\n", join (" ", @{$data->{changes}})
-          if $data->{changes};
-
-        printf "\tCommitted:     %s\n", join (" ", @{$data->{commits}})
-          if $data->{commits};
-
-        printf "\tCommit Error:  %s\n", $data->{commitStatus}->{error}
-          if (defined $data->{commitStatus}
-              && ref $data->{commitStatus} eq 'HASH'
-              && defined $data->{commitStatus}->{error});
-
-        printf "\tState:         %s%s\n", $data->{state},
-          ($data->{pending} ? ", pending" : "");
-
-        printf "\tCreated:       %s\n", timefmt ($data->{created});
-        printf "\tUpdate:        %s\n", timefmt ($data->{updated});
-        print "\n";
-      } sort keys %found;
+  map { print_review ($_, $found{$_}) } sort keys %found;
 }
 
 main (@ARGV);
