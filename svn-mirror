@@ -1,79 +1,106 @@
-#!/bin/sh
+#!/usr/bin/env bash
 # svn-mirror --- Keep local mirror of remote svn server
 # Created: 2010-03-03
 # Public domain
 
-# $Id$
+# $Id: svn-mirror,v 1.1 2011/01/18 04:02:21 friedman Exp $
 
 # Commentary:
 # Code:
 
+get_dst_url()
+{
+    set : ${1%/}; shift  # remove any trailing /
+    case $1 in
+        /* ) echo file://$1               ;;
+        '' ) echo file://`pwd`            ;;
+        *  ) echo file://`cd "$1" && pwd` ;;
+    esac
+}
+
+get_src_url()
+{
+    svnlook propget --revprop -r0 "$1" svn:sync-from-url
+}
+
+set_src_url()
+{
+    local dst_url=`get_dst_url "$1"`
+    local old_src_url=`get_src_url "$1"`
+
+    case $2 in
+        $old_src_url )
+            echo Source URL unchanged from $old_src_url
+            return 0 ;;
+    esac
+
+    if svn propset --revprop -r0 svn:sync-from-url "$2" "$dst_url"; then
+        echo "Old URL: $old_src_url"
+        echo "New URL: $2"
+    fi
+}
+
 svn_setup()
 {
-  _svndir=$1 _url=$2
-  shift; shift
+    local dst_dir=$1
+    local src_url=$2
 
-  svnadmin create "$_svndir"
-  echo '#!/bin/sh' > "$_svndir/hooks/pre-revprop-change"
-  chmod a+x "$_svndir/hooks/pre-revprop-change"
+    svnadmin create "$dst_dir"
+    echo '#!/bin/sh' > "$dst_dir/hooks/pre-revprop-change"
+    chmod a+x "$dst_dir/hooks/pre-revprop-change"
 
-  _topdir=`cd "$svndir/.." && pwd`
-  _svndir=${_svndir##*/}
-
-  svnsync init "file://$_topdir/$_svndir" "$_url"
+    local dst_url=`get_dst_url "$dst_dir"`
+    svnsync init "$dst_url" "$src_url"
 }
 
 svn_sync()
 {
-  _svndir=$1
-  shift
-
-  _topdir=`cd "$_svndir/.." && pwd`
-  _svndir=${_svndir##*/}
-
-  svnsync sync "file://$_topdir/$_svndir"
+    local dst_url=`get_dst_url "$1"`
+    svnsync sync "$dst_url"
 }
 
 usage()
 {
-  progname=${0##*/}
+    progname=${0##*/}
 
-  {
-    case $# in
-      0 ) : ;;
-      * ) echo "$progname: $*"; echo ;;
-    esac
+    {
+        case $# in
+            0 ) : ;;
+            * ) echo "$progname: $*"; echo ;;
+        esac
 
-    echo "Usage: $progname [path to local repository] {remote svn url}"
-    echo
-    echo If the local repository is already present, the url is not required
-    echo and the local repository will just be brought up to date.
-  } 1>&2
+        echo "Usage: $progname [path to local repository] {remote svn url}"
+        echo
+        echo If the local repository is already present, the url is not required
+        echo and the local repository will just be brought up to date.
+    } 1>&2
 
-  exit 1
+    exit 1
 }
 
 main()
 {
-  case $# in
-    1|2 ) :     ;;
-    *   ) usage ;;
-  esac
-
-  svndir=$1 url=$2
-  shift; shift
-
-  if [ ! -d "$svndir/db" ]; then
-    case $url in
-      '' ) usage "Need to specify URL to mirror." ;;
+    case $# in
+        1|2 ) :     ;;
+        *   ) usage ;;
     esac
 
-    svn_setup "$svndir" "$url"
-  fi
+    local dst_dir=$1
+    local src_url=$2
 
-  svn_sync "$svndir"
+    if [ ! -d "$dst_dir/db" ]; then
+        case $src_url in
+            '' ) usage "Need to specify URL to mirror." ;;
+        esac
+
+        svn_setup "$dst_dir" "$src_url"
+    elif [ -n "$src_url" ]; then
+        set_src_url "$dst_dir" "$src_url"
+    fi
+
+    svn_sync "$dst_dir"
 }
 
-main ${1+"$@"}
+main "$@"
 
 # eof
