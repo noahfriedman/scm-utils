@@ -1,0 +1,59 @@
+#!/usr/bin/env perl
+# p4-opened --- show open files in local path format
+# Author: Noah Friedman <friedman@splode.com>
+# Created: 2016-08-18
+# Public domain
+
+# $Id$
+
+# Commentary:
+
+# This is easier to read and workspace paths are more useful.
+
+# Code:
+
+use strict;
+use warnings qw(all);
+
+use FindBin;
+use lib "$FindBin::Bin/../lib/perl";
+use lib "$ENV{HOME}/lib/perl";
+
+use NF::P4cmd qw(:direct);
+
+sub info
+{
+}
+
+sub main
+{
+  my @data = p4 (qw(info));
+  my $clientRoot = $data[0]->{clientRoot};
+  my $sublen = 2 + length ($data[0]->{clientName});
+
+  @data = p4 (qw(opened), @_);
+  if ($data[0]->{code} eq 'error')
+    {
+      print STDERR $data[0]->{data};
+      exit (1);
+    }
+
+  my @w;
+  map { my $localPath = $clientRoot . substr ($_->{clientFile}, $sublen);
+        my @row = ($localPath, @{$_}{qw(action change rev type)});
+        $row[3] = '#' . $row[3];
+        for (my $i = 0; $i < @row; $i++)
+          {
+            my $len = length ($row[$i]);
+            $w[$i] = $len if !defined $w[$i] || $len > $w[$i];
+          }
+        $_ = \@row;
+      } @data;
+
+  my $fmt = join ("  ", map { "%-" . $_ . "s" } @w) . "\n";
+  map { printf $fmt, @$_ } @data;
+}
+
+main (@ARGV);
+
+# eof
