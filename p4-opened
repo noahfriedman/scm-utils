@@ -4,7 +4,7 @@
 # Created: 2016-08-18
 # Public domain
 
-# $Id$
+# $Id: p4-opened,v 1.1 2016/08/18 21:00:13 friedman Exp $
 
 # Commentary:
 
@@ -21,22 +21,16 @@ use lib "$ENV{HOME}/lib/perl";
 
 use NF::P4cmd qw(:direct);
 
-sub info
-{
-}
-
 sub main
 {
   my @data = p4 (qw(info));
+  die $data[0]->{data} if $data[0]->{code} eq 'error';
+
   my $clientRoot = $data[0]->{clientRoot};
   my $sublen = 2 + length ($data[0]->{clientName});
 
   @data = p4 (qw(opened), @_);
-  if ($data[0]->{code} eq 'error')
-    {
-      print STDERR $data[0]->{data};
-      exit (1);
-    }
+  die $data[0]->{data} if $data[0]->{code} eq 'error';
 
   my @w;
   map { my $localPath = $clientRoot . substr ($_->{clientFile}, $sublen);
