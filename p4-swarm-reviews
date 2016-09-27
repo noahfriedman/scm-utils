@@ -1,5 +1,5 @@
 #!/usr/bin/env perl
-# $Id: p4-swarm-reviews,v 1.6 2016/07/01 19:38:54 friedman Exp $
+# $Id: p4-swarm-reviews,v 1.7 2016/07/01 19:51:47 friedman Exp $
 
 package REST::Generic;
 
@@ -91,11 +91,11 @@ sub GET
 
   unless ($code == 200)
     {
-      if (exists $decoded->{errorMessages}) # jira
+      if (exists $decoded->{errorMessages})  # jira
         { croak sprintf ("Error: %s\n", join ("\n", @{$decoded->{errorMessages}})) }
       elsif (exists $decoded->{message})     # jira
         { croak sprintf ("Error %s: %s\n", $decoded->{'status-code'}, $decoded->{message}) }
-      elsif (exists $decoded->{error})     # swarm
+      elsif (exists $decoded->{error})       # swarm
         { croak sprintf ("Error %s: %s\n", $path, $decoded->{error}) }
       else
         { croak sprintf ("Error on query: %s\n", $path) }
@@ -280,7 +280,7 @@ use POSIX qw(strftime);
 my $swarm_host = 'http://swarm.perforce.com';
 my $jira_host  = 'http://jira.perforce.com:8080';
 my $jira_user  = 'build';
-my $jira_pass  = 'rein4ce';
+my $jira_pass  = 'rein4ce!';
 
 my @review_fields   = (qw(id author description
                           changes commits commitStatus
@@ -315,7 +315,7 @@ sub parse_review
         {
           $f->{commits} = $commits;
 
-          # Remove any numbers that appear in in commits from changes
+          # Remove any numbers that appear in commits from changes
           my %rem = map { $_ => undef } @$changes;
           map { delete $rem{$_} } @$commits;
           $changes = [sort keys %rem];
