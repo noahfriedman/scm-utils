@@ -31,7 +31,7 @@ sub git_branch
   my %result;
   map { s=^\*?\s*(?:remotes/)?==;
         $result{$_} = undef unless / -> /;
-      } split (/[\r\n]+/, cmd_out (qw(git branch), @_));
+      } split (/[\r\n]+/, cmd_out (qw(git branch --column=never), @_));
   return %result;
 }
 
