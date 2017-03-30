@@ -1,9 +1,23 @@
 #!/bin/sh
-# $Id: git-update,v 1.3 2015/11/30 02:57:54 friedman Exp $
+# $Id: git-update,v 1.4 2016/08/19 20:10:06 friedman Exp $
 
 git_revno()
 {
     git rev-list -n1 HEAD
+}
+
+bare_repo_p()
+{
+    case `git config --bool --local --get core.bare` in
+        true ) return 0 ;;
+        *    ) return 1 ;;
+    esac
+}
+
+has_remotes()
+{
+    # exit code 1 if no matches
+    git config --local --get-regexp '^remote\..*\.url$' > /dev/null
 }
 
 main()
@@ -13,11 +27,20 @@ main()
         --rebase ) rebase=--rebase=preserve ;;
     esac
 
-    revno_old=`git_revno`
-    git pull $rebase --no-stat --all --recurse-submodules
-    revno_new=`git_revno`
+    if ! has_remotes; then
+        #echo "repository has no upstream remotes"
+        return 0
+    fi
 
-    git-restore-commit-mtime $revno_old..$revno_new
+    if bare_repo_p; then
+        git fetch --all
+    else
+        revno_old=`git_revno`
+        git pull $rebase --all --no-stat --recurse-submodules
+        revno_new=`git_revno`
+
+        git-restore-commit-mtime $revno_old..$revno_new
+    fi
 }
 
 main "$@"
