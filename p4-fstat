@@ -1,0 +1,101 @@
+#!/usr/bin/env perl
+# p4-fstat --- pretty-printer for various p4 file operations
+# Author: Noah Friedman <friedman@splode.com>
+# Created: 2016-08-18
+# Public domain
+
+# $Id$
+
+# Commentary:
+
+# This is easier to read and workspace paths are more useful.
+
+# TODO: add options to enable:
+#   * reporting only files open for editing
+#   * files for which the head revision is not deleted
+#   * files which need resolving
+#   * files outside the mapped workspace (depot mode)
+
+# Code:
+
+use strict;
+use warnings qw(all);
+
+use FindBin;
+use lib "$FindBin::Bin/../lib/perl";
+use lib "$ENV{HOME}/lib/perl";
+
+use Getopt::Long;
+use Pod::Usage;
+
+use NF::P4cmd qw(:direct);
+
+my %opt = ( have   => 0,
+            opened => 0,
+            p4flags => [],
+          );
+
+sub parse_options
+{
+  my $help = -1;
+
+  p4_process_cmdline_options ($_[0]);
+  local *ARGV = \@{$_[0]}; # modify our local arglist, not real ARGV.
+
+  my $parser = Getopt::Long::Parser->new;
+  $parser->configure (qw(bundling autoabbrev no_ignore_case));
+  my $succ = $parser->getoptions
+    ( "debug"           => \$NF::P4cmd::DEBUG,
+      "h|?|help+"       => \$help,
+
+      'm|max=i@'        => \$opt{p4flags},
+      'c|change=i@'     => \$opt{p4flags},
+      'e|equal=i@'      => \$opt{p4flags},
+      'F|filter=s@'     => \$opt{p4flags},
+
+      "H|have"          => \$opt{have},
+      "O|opened"        => \$opt{opened},
+      "D|deleted!"      => \$opt{deleted},
+    );
+
+  pod2usage (-exitstatus => 1, -verbose => 0)     unless $succ;
+  pod2usage (-exitstatus => 0, -verbose => $help) if $help >= 0;
+}
+
+sub main
+{
+  parse_options (\@_);
+
+  my @data = p4 (qw(info));
+  die unless @data;
+  die $data[0]->{data} if $data[0]->{code} eq 'error';
+
+  my $clientRoot = $data[0]->{clientRoot};
+  my $sublen = 2 + length ($data[0]->{clientName});
+
+  # p4 fstat -Op -F "haveRev" -T "clientFile, path" ...
+  my @fstat_flags = (qw(-Op));
+  push @fstat_flags, "-Rh" if $opt{have};
+
+  @data = p4 (qw(fstat), @fstat_flags, @_);
+  die $data[0]->{data} if $data[0]->{code} eq 'error';
+
+  my @w;
+  map { my $localPath = $clientRoot . substr ($_->{clientFile}, $sublen);
+        my @row = ($localPath, @{$_}{qw(headAction headChange headRev headType)});
+        $row[3] = '#' . $row[3];
+        for (my $i = 0; $i < @row; $i++)
+          {
+            my $len = length ($row[$i]);
+            $w[$i] = $len if !defined $w[$i] || $len > $w[$i];
+          }
+        $_ = \@row;
+      } @data;
+
+  my $fmt = join ("  ", map { "%-" . $_ . "s" } @w) . "\n";
+  map { printf $fmt, @$_ } @data;
+}
+
+main (@ARGV);
+
+# eof
