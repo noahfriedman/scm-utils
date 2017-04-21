@@ -4,17 +4,11 @@
 # Created: 2016-08-18
 # Public domain
 
-# $Id: p4-fstat,v 1.1 2017/04/13 23:58:14 friedman Exp $
+# $Id: p4-fstat,v 1.2 2017/04/18 00:26:48 friedman Exp $
 
 # Commentary:
 
 # This is easier to read and workspace paths are more useful.
-
-# TODO: add options to enable:
-#   * reporting only files open for editing
-#   * files for which the head revision is not deleted
-#   * files which need resolving
-#   * files outside the mapped workspace (depot mode)
 
 # Code:
 
@@ -46,7 +40,7 @@ my @fieldsP = (qw(headAction headChange headRev headType));
 my @fieldsO = (qw(action change workRev type));
 
 # Fields which are right-justified
-my @fieldRJ = (undef, 0, 1, 0, 0); # undef is for clientFile/depotFile
+my @fieldRJ = (undef, 0, 1, 1, 0); # undef is for clientFile/depotFile
 
 sub parse_options
 {
@@ -97,8 +91,8 @@ sub main
 {
   parse_options (\@_);
 
-  push @flags, ("-F", join (" & ", @filter)) if @filter;
-  push @flags, "-T", join (",", @fieldsT);
+  push @flags, "-F", join (" & ", @filter) if @filter;
+  push @flags, "-T", join (",",   @fieldsT);
 
   my @data = p4 (qw(fstat), @flags, @_);
   die $data[0]->{data} if $data[0]->{code} eq 'error';
