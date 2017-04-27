@@ -4,7 +4,7 @@
 # Created: 2016-08-18
 # Public domain
 
-# $Id: p4-fstat,v 1.2 2017/04/18 00:26:48 friedman Exp $
+# $Id: p4-fstat,v 1.3 2017/04/21 00:03:32 friedman Exp $
 
 # Commentary:
 
@@ -21,26 +21,32 @@ use lib "$ENV{HOME}/lib/perl";
 
 use Getopt::Long;
 use Pod::Usage;
+use POSIX        qw(strftime);
 
-use NF::P4cmd qw(:direct);
+use NF::P4cmd    qw(:direct);
+use NF::FileUtil qw(:dir);
 
-my %opt;
+my %opt = ( localpath => 0,
+          );;
 
 my @flags;
 my @filter;
 
 # Fields we request from server
 my @fieldsT = (qw(depotFile clientFile path  haveRev
-                  headAction headChange headRev headType
-                      action     change workRev     type));
+                  headAction headChange headRev headType headModTime
+                      action     change workRev     type headTime));
 
 # Fields we print per row, in order
-my @fieldsP = (qw(headAction headChange headRev headType));
+my @fieldsP = (qw(headAction headChange headRev));
 # Fields we print per row if file is open
-my @fieldsO = (qw(action change workRev type));
+my @fieldsO = (qw(action change workRev));
 
 # Fields which are right-justified
-my @fieldRJ = (undef, 0, 1, 1, 0); # undef is for clientFile/depotFile
+my @fieldRJ = (undef, 0, 1, 1); # first undef is for clientFile/depotFile
+
+my $p4info;
+my $strftime_fmt = "%Y-%m-%d";
 
 sub parse_options
 {
@@ -54,51 +60,100 @@ sub parse_options
   my $parser = Getopt::Long::Parser->new;
   $parser->configure (qw(bundling autoabbrev no_ignore_case));
   my $succ = $parser->getoptions
-    ( "debug"        => \$NF::P4cmd::DEBUG,
-      "h|?|help+"    => \$help,
+    ( "debug"         => \$NF::P4cmd::DEBUG,
+      "h|?|help+"     => \$help,
 
-      "l|local-path" => \$opt{localpath},
+      "l|local-path+" => \$opt{localpath},
+      "v|verbose+"    => \$opt{verbose},
 
       # Note that we use -e, not -c, for speed and least surprise since -c
       # also matches any *later* change, a behavior which is not consistent
       # with most other commands. If you really want fstat -c, use after --.
-      'c|change=i'   => sub { push @flags, "-e", $_[1] },
-      'm|max=i'      => sub { push @flags, "-m", $_[1] },
-      'F|filter=s@'  => \@filter,
+      'c|change=i'    => sub { push @flags, "-e", $_[1] },
+      'm|max=i'       => sub { push @flags, "-m", $_[1] },
+      'F|filter=s@'   => \@filter,
 
-      'O=s@'         => $pthrough,
-      'R=s@'         => $pthrough,
-      'S=s@'         => $pthrough,
+      'O=s@'          => $pthrough,
+      'R=s@'          => $pthrough,
+      'S=s@'          => $pthrough,
 
-      "H|have"       => sub { push @flags, "-Rh" },
-      "o|opened"     => sub { push @flags, "-Ro" },
-      "e|exists"     => sub { push @filter,
-                                (qw(^headAction=delete
-                                    ^headAction=move/delete
-                                    ^headAction=purge
-                                  ));
-                            },
+      "H|have"        => sub { push @flags, "-Rh" },
+      "o|opened"      => sub { push @flags, "-Ro" },
+      "e|exists"      => sub { push @filter,
+                                 (qw(^headAction=delete
+                                     ^headAction=move/delete
+                                     ^headAction=purge
+                                   ));
+                             },
 
-      "p=s"          => \$ENV{OVERRIDE_P4PORT},
-      "u=s"          => \$ENV{OVERRIDE_P4USER},
+      "p=s"           => \$ENV{OVERRIDE_P4PORT},
+      "u=s"           => \$ENV{OVERRIDE_P4USER},
     );
 
   pod2usage (-exitstatus => 1, -verbose => 0)     unless $succ;
   pod2usage (-exitstatus => 0, -verbose => $help) if $help >= 0;
+
+  if ($opt{verbose})
+    {
+      push @fieldsP, (qw(headType headTime));
+      push @fieldsO, (qw(type     headTime));
+      $strftime_fmt = "%Y-%m-%d %H:%M:%S" if $opt{verbose} > 1;
+    }
+}
+
+sub p4cmd
+{
+  my @data = p4 (@_);
+  die unless @data;
+  die $data[0]->{data} if $data[0]->{code} eq 'error' && @data == 1 ;
+  return @data;
+}
+
+sub p4info
+{
+  unless (defined $p4info)
+    {
+      my @data = p4cmd (qw(info));
+      $p4info = $data[0];
+    }
+  return $p4info;
+}
+
+# Modifies arg in-place
+sub prune_local
+{
+  return if substr ($_[0], 0, 2) eq '//';
+
+  my $level   = $opt{localpath};
+  my $cwd     = p4info()->{clientCwd};
+  my $cwdlen  = length ($cwd);
+  my $len     = length $_[0];
+
+  if ($level >= 2 && $len > $cwdlen)
+    {
+      if (substr ($_[0], 0, $cwdlen) eq $cwd)
+        {
+          substr ($_[0], 0, $cwdlen+1) = "";
+        }
+      else
+        {
+          $_[0] = make_relative_directory_path ($_[0], $cwd);
+        }
+    }
+  return;
 }
 
 sub main
 {
   parse_options (\@_);
 
+  push @_, sprintf ("//%s/...#have", p4info()->{clientName}) unless @_;
+
   push @flags, "-F", join (" & ", @filter) if @filter;
   push @flags, "-T", join (",",   @fieldsT);
 
-  my @data = p4 (qw(fstat), @flags, @_);
-  die $data[0]->{data} if $data[0]->{code} eq 'error';
-
+  my @data = p4cmd (qw(fstat), @flags, @_);
   my $xFile = $opt{localpath} ? 'clientFile' : 'depotFile';
-
   my @w;
   my @toprint;
   for my $r (@data)
@@ -119,13 +174,17 @@ sub main
           push @row, @{$r}{@fieldsP};
           substr ($row[1], 0, 0, ' ');
         }
+
       substr ($row[3], 0, 0, '#');
+      $row[5] = strftime ($strftime_fmt, localtime ($row[5])) if @row > 5;
+      prune_local ($row[0]) if $opt{localpath} > 1;
 
       for (my $i = 0; $i < @row; $i++)
         {
           my $len = length ($row[$i]);
           $w[$i] = $len if !defined $w[$i] || $len > $w[$i];
         }
+
       push @toprint, \@row;
     }
 
