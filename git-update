@@ -1,5 +1,5 @@
 #!/bin/sh
-# $Id: git-update,v 1.4 2016/08/19 20:10:06 friedman Exp $
+# $Id: git-update,v 1.5 2017/03/30 22:34:30 friedman Exp $
 
 git_revno()
 {
@@ -36,7 +36,7 @@ main()
         git fetch --all
     else
         revno_old=`git_revno`
-        git pull $rebase --all --no-stat --recurse-submodules
+        git pull $rebase --all --prune --no-stat --recurse-submodules
         revno_new=`git_revno`
 
         git-restore-commit-mtime $revno_old..$revno_new
