@@ -1,0 +1,14 @@
+#!/bin/sh
+# $Id$
+
+for url in "$@"; do
+    localdir=${url##*/}
+    localdir=${localdir%.git}.git  # make sure it ends in .git
+
+    echo "** $url"
+    git clone "$url" "$localdir" &&
+        (cd "$localdir" && git-restore-commit-mtime)
+    echo
+done
+
+# eof
