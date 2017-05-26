@@ -1,5 +1,5 @@
-#!/bin/sh
-# $Id: git-update,v 1.5 2017/03/30 22:34:30 friedman Exp $
+#!/usr/bin/env bash
+# $Id: git-update,v 1.6 2017/05/12 22:10:33 friedman Exp $
 
 git_revno()
 {
@@ -20,27 +20,51 @@ has_remotes()
     git config --local --get-regexp '^remote\..*\.url$' > /dev/null
 }
 
+apush() { eval "$1=(\"\${$1[@]}\" \"\${@:2}\")"; }
+
 main()
 {
-    cd "${1-.}" || exit $?
-    case $2 in
-        --rebase ) rebase=--rebase=preserve ;;
-    esac
+    while :; do
+        case $1 in
+            -r | --rebase ) shift; apush gitargs --rebase=preserve ;;
+            -p | --prune  ) shift; apush gitargs --prune ;;
+            * ) break ;;
+        esac
+    done
 
-    if ! has_remotes; then
-        #echo "repository has no upstream remotes"
-        return 0
-    fi
+    case $# in 0 ) set . ;; esac
 
-    if bare_repo_p; then
-        git fetch --all
-    else
-        revno_old=`git_revno`
-        git pull $rebase --all --prune --no-stat --recurse-submodules
-        revno_new=`git_revno`
+    for dir in "$@"; do
+        if [ $# -gt 1 ]; then
+            case $dir in
+                .  ) gdir=`pwd` ;;
+                .. ) gdir=`cd .. && pwd` ;;
+                *  ) gdir=$dir ;;
+            esac
+            echo "* $gdir"
+        fi
 
-        git-restore-commit-mtime $revno_old..$revno_new
-    fi
+        (
+            cd "$dir" || exit $?
+
+            if ! has_remotes; then
+                #echo "repository has no upstream remotes"
+                return 0
+            fi
+
+            if bare_repo_p; then
+                git fetch --all
+            else
+                revno_old=`git_revno`
+                git pull "${gitargs[@]}" --all --no-stat --recurse-submodules
+                revno_new=`git_revno`
+
+                git-restore-commit-mtime $revno_old..$revno_new
+            fi
+        )
+
+        test $# -gt 1 && echo
+    done
 }
 
 main "$@"
