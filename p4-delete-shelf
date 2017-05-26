@@ -1,0 +1,57 @@
+#!/usr/bin/env perl
+# p4-delete-shelf
+# Author: Noah Friedman <friedman@splode.com>
+# Created: 2015-12-30
+# Public domain
+
+# $Id$
+
+# Commentary:
+# Code:
+
+use strict;
+use warnings qw(all);
+
+use FindBin;
+use lib "$FindBin::Bin/../lib/perl";
+use lib "$ENV{HOME}/lib/perl";
+
+use NF::P4cmd qw(:direct);
+
+sub main
+{
+  my $changeno = pop @_;
+  (my $form) = p4 (@_, 'change', '-o', $changeno);
+
+  $form->{View}
+
+
+  my @data = p4 (qw(annotate -c -db -dw -dl), @_);
+  if ($data[0]->{code} eq 'error')
+    {
+      print STDERR $data[0]->{data};
+      exit (1);
+    }
+  shift @data unless exists $data[0]->{lower}; # skip initial depotFile record.
+
+  my @cmd = map { "change -o $_" } uniq (map { $_->{lower} } @data);
+  my %change = map { $_->{Date}   =  substr ($_->{Date}, 0, 10);
+                     $_->{Change} => $_
+                   } p4 (\@cmd, "-b", scalar @cmd, "run");
+  undef @cmd; # gc
+
+  my $line = 1;
+  my $linewidth = 1 + int (log10 (scalar @data));
+  my $fmt = sprintf ("%%7d  %%s  %%-9s  %%%dd: %%s", $linewidth);
+
+  for my $elt (@data)
+    {
+      my $changeno = $elt->{lower};
+      my $info = $change{$changeno};
+      printf($fmt, $changeno, $info->{Date}, $info->{User}, $line++, $elt->{data});
+    }
+}
+
+main (@ARGV);
+
+# eof
