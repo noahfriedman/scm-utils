@@ -1,12 +1,12 @@
 #!/bin/sh
-# $Id$
+# $Id: git-multiclone,v 1.1 2017/05/19 20:59:45 friedman Exp $
 
 for url in "$@"; do
     localdir=${url##*/}
     localdir=${localdir%.git}.git  # make sure it ends in .git
 
     echo "** $url"
-    git clone "$url" "$localdir" &&
+    git clone --recursive "$url" "$localdir" &&
         (cd "$localdir" && git-restore-commit-mtime)
     echo
 done
