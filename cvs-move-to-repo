@@ -1,0 +1,62 @@
+#!/bin/sh
+# $Id$
+
+set_dstdir()
+{
+    read root < CVS/Root
+    read repo < CVS/Repository
+
+    # egregious kludge
+    case $root in
+        *:friedman@cvs.prv* ) root=noah@${root#:*:friedman@} ;;
+    esac
+
+    dstdir=${root#:*:}/$repo
+    case $dstdir in
+        *:* ) cp=scp ;;
+        *   ) cp=cp  ;;
+    esac
+}
+
+already_in_cvs()
+{
+    while read entry; do
+        case $entry in
+            /$1/* ) return 0 ;;
+        esac
+    done < CVS/Entries
+    return 1
+}
+
+main()
+{
+    origdir=$PWD
+    for file in "$@"; do
+        dir=${file%/*}
+        case $dir in
+            $file ) dir=. ;;
+        esac
+
+        w=${file##*/}
+        v=$w,v
+
+        cd "$dir" || continue
+        if already_in_cvs "$w"; then
+            echo "$file: already in CVS"
+            echo
+            continue
+        fi 1>&2
+
+        set_dstdir
+        ci -d "$w" < /dev/null       &&
+            $cp -p "$v" "$dstdir/$v" &&
+            rm -f "$v"
+        echo
+
+        cd "$origdir"
+    done
+}
+
+main "$@"
+
+# eof
