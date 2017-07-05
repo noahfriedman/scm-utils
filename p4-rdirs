@@ -1,0 +1,91 @@
+#!/usr/bin/env perl
+# p4-rdirs --- recursively list depot directories
+# Author: Noah Friedman <friedman@splode.com>
+# Created: 2017-06-21
+# Public domain
+
+# $Id$
+
+# Commentary:
+# Code:
+
+use strict;
+use warnings qw(all);
+
+use FindBin;
+use lib "$FindBin::Bin/../lib/perl";
+use lib "$ENV{HOME}/lib/perl";
+
+use Getopt::Long;
+use Pod::Usage;
+
+use NF::P4cmd    qw(:direct);
+
+my @p4_dirs_flags;
+our %opt;
+
+sub parse_options
+{
+  my $help = -1;
+
+  p4_process_cmdline_options ($_[0]);
+  local *ARGV = \@{$_[0]}; # modify our local arglist, not real ARGV.
+
+  my $pthrough = sub { push @p4_dirs_flags, join ("", '-', @_) };
+
+  my $parser = Getopt::Long::Parser->new;
+  $parser->configure (qw(bundling autoabbrev no_ignore_case));
+  my $succ = $parser->getoptions
+    ( "debug"         => \$NF::P4cmd::DEBUG,
+      "h|?|help+"     => \$help,
+
+      "p=s"           => \$ENV{OVERRIDE_P4PORT},
+      "u=s"           => \$ENV{OVERRIDE_P4USER},
+
+      "l|leaf|leaves" => \$opt{leaf},
+
+      map { $_ => $pthrough } (qw(D H
+                                  C|client
+                                  S|stream=s
+                                  i|ignore-case
+                                  ignore-changeview)),
+    );
+
+  pod2usage (-exitstatus => 1, -verbose => 0)     unless $succ;
+  pod2usage (-exitstatus => 0, -verbose => $help) if $help >= 0;
+}
+
+sub p4_dirs
+{
+  map { $_->{code} eq 'stat' ? $_->{dir} : ()
+      } p4 ([map { $_ . '/*' } @_], 'dirs', @p4_dirs_flags);
+}
+
+sub main
+{
+  parse_options (\@_);
+
+  my %dirs;
+  my @args = @_ ? @_ : '.';
+
+  map { $dirs{$_} = undef } @args
+    while (@args = p4_dirs (@args));
+
+  my @dirs = sort keys %dirs;
+  if ($opt{leaf})
+    {
+      for (my $i = 0; $i+1 < @dirs; $i++)
+        {
+          my $l = length $dirs[$i];
+          splice (@dirs, $i--, 1)
+            if (($l < length ($dirs[$i+1]))
+                && (substr ($dirs[$i+1], 0, $l) eq $dirs[$i]));
+        }
+    }
+
+  map { print $_, "/\n" } @dirs;
+}
+
+main (@ARGV);
+
+# eof
