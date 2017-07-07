@@ -4,7 +4,7 @@
 # Created: 2014-11-13
 # Public domain.
 
-# $Id: p4-describe-changes,v 1.9 2016/06/23 02:05:11 friedman Exp $
+# $Id: p4-describe-changes,v 1.10 2017/05/04 23:40:29 friedman Exp $
 
 # Commentary:
 # Code:
@@ -34,6 +34,7 @@ my %opt = ( traditional => 0,
             show_desc   => 1,
             show_files  => 1,
             show_jobs   => 1,
+            show_size   => 0,
             reverse     => 0,
           );
 
@@ -56,6 +57,7 @@ sub parse_options
       "d|descriptions!" => \$opt{show_desc},
       "f|files!"        => \$opt{show_files},
       "j|jobs!"         => \$opt{show_jobs},
+      "s|size!"         => \$opt{show_size},
       "recursion!"      => \$opt{recur},
 
       # The long options above are automatically negated
@@ -64,6 +66,7 @@ sub parse_options
       "D"               => sub { $opt{show_desc}   = 0 },
       "F"               => sub { $opt{show_files}  = 0 },
       "J"               => sub { $opt{show_jobs}   = 0 },
+      "S"               => sub { $opt{show_size}   = 0 },
       "R"               => sub { $opt{recur}       = 0 },
     );
 
@@ -72,6 +75,7 @@ sub parse_options
 
   if ($opt{traditional}
       && ($opt{show_integs}
+          || $opt{show_size}
           || !$opt{show_desc}
           || !$opt{show_files}
           || !$opt{show_jobs}))
@@ -381,12 +385,26 @@ sub describe_change
 
   if ($opt{show_files})
     {
-      my $tmpl = "\t%3s %-5s  %-11s  %s\n";
+      my $tmpl   = "\t%3s %-5s  %-11s  %s\n";
+      my $tmplsz = "\t%3s %-5s  %-11s  %5s  %s\n";
+      my $sztotal = 0;
+
       map { my $rev    = shift @{$change->{rev}};
             my $action = shift @{$change->{action}};
             my @integ;
 
-            printf($tmpl, '...', '#' . $rev, $action, $_);
+            if ($opt{show_size})
+              {
+                my $size = shift @{$change->{fileSize}};
+                $sztotal += $size if defined $size;
+
+                printf($tmplsz, '...', '#' . $rev, $action, fmtsize ($size), $_);
+              }
+            else
+              {
+                printf($tmpl, '...', '#' . $rev, $action, $_);
+              }
+
             if ($integs
                 && (@integ = integ_of ($integs, $changeno, $_, $rev)))
               {
@@ -396,8 +414,32 @@ sub describe_change
             print "\n" if $integs->{$changeno};
 
           } @{$change->{depotFile}};
+      if ($opt{show_size} && $sztotal > 0 && @{$change->{depotFile}} > 1)
+        {
+          printf($tmplsz, '', '', '', fmtsize ($sztotal), 'Total');
+        }
+
       print "\n";
     }
+}
+
+sub fmtsize
+{
+  return '' unless defined $_[0] && $_[0] ne '0';
+
+  my $size   = shift;
+  my $fmtsize = 1024;
+  my @suffix = ('', qw(K M G T P E));
+  my $idx = 0;
+
+  while ($size > $fmtsize)
+    {
+      $size /= $fmtsize;
+      $idx++;
+    }
+
+  my $fmtstr = $size < 100 && $idx != 0 ? "%.1f%s" : "%d%s" ;
+  return sprintf ($fmtstr, $size, $suffix[$idx]);
 }
 
 sub main
@@ -451,7 +493,8 @@ __END__
      {-i|--integrations}   {-I|--no-integrations}    {--p4port   PORT}
      {-d|--descriptions}   {-D|--no-descriptions}    {--p4client CLIENT}
      {-f|--files}          {-F|--no-files}           {--p4dir    DIR}
-     {-j|--jobs}           {-J|--no-jobs}            {--p4host   HOST}
+     {-s|--size}           {-S|--no-size}            {--p4host   HOST}
+     {-j|--jobs}           {-J|--no-jobs}
 
      ... changelists or files
 
@@ -493,6 +536,14 @@ Display the description of the change.  This is the default.
 
 Display the files associated with the change.  This is the default.
 
+=item B<-s>, B<--size>
+
+Display the size of each file in the changelist, if they have one
+(e.g. deleted files don't), and a total sum at the end if there is more
+than one file.
+
+This option only has effect if B<--files> is enabled.
+
 =item B<-j>, B<--jobs>
 
 Display the job names fixed by the change.  This is the default.
@@ -523,6 +574,10 @@ Do not display the files associated with each change.
 If this option is combined with B<--integrations>, the output will include
 a list of the integrated changes but will not display the individual files
 from those changes.
+
+=item B<-S>, B<--no-size>
+
+Do not display file sizes in the file list.  This is the default.
 
 =item B<-J>, B<--no-jobs>
 
