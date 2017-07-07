@@ -4,7 +4,7 @@
 # Created: 2013-02-26
 # Public domain
 
-# $Id: p4-blame,v 1.4 2015/08/15 00:40:57 friedman Exp $
+# $Id: p4-blame,v 1.5 2015/11/04 20:22:44 friedman Exp $
 
 # Commentary:
 # Code:
@@ -12,6 +12,8 @@
 use strict;
 use warnings qw(all);
  no warnings qw(experimental::autoderef);  # for uniq
+
+use POSIX qw(strftime);
 
 use FindBin;
 use lib "$FindBin::Bin/../lib/perl";
@@ -25,25 +27,40 @@ sub uniq  { keys { map { $_ => undef } @_ } }
 sub main
 {
   my @data = p4 (qw(annotate -c -db -dw -dl), @_);
-  if ($data[0]->{code} eq 'error')
-    {
-      print STDERR $data[0]->{data};
-      exit (1);
-    }
-  shift @data unless exists $data[0]->{lower}; # skip initial depotFile record.
 
-  my @cmd = map { "change -o $_" } uniq (map { $_->{lower} } @data);
+  my @cmd = map { "change -o $_" } uniq (map { $_->{lower} || () } @data);
   my %change = map { $_->{Date}   =  substr ($_->{Date}, 0, 10);
                      $_->{Change} => $_
                    } p4 (\@cmd, "-b", scalar @cmd, "run");
   undef @cmd; # gc
 
+  my $nfiles = grep { exists $_->{depotFile} } @data;
+  my $fcount = 0;
   my $line = 1;
   my $linewidth = 1 + int (log10 (scalar @data));
   my $fmt = sprintf ("%%7d  %%s  %%-9s  %%%dd: %%s", $linewidth);
 
   for my $elt (@data)
     {
+      $elt->{data} .= "\n"
+        if (defined $elt->{data} && substr ($elt->{data}, -1, 1) ne "\n");
+
+      if ($elt->{code} eq 'error')
+        {
+          print STDERR $elt->{data};
+          next;
+        }
+      elsif (exists $elt->{depotFile})  # new file
+        {
+          $line = 1;
+          print "\n" if $fcount++ > 0;
+          printf("%s#%s - %s %s (%s) %s\n",
+                 @{$elt}{qw(depotFile rev action change type)},
+                 strftime ("%Y-%m-%d %H:%M:%S", localtime ($elt->{time})))
+            if $nfiles > 1;
+          next;
+        }
+
       my $changeno = $elt->{lower};
       my $info = $change{$changeno};
       printf($fmt, $changeno, $info->{Date}, $info->{User}, $line++, $elt->{data});
