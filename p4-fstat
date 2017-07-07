@@ -4,7 +4,7 @@
 # Created: 2016-08-18
 # Public domain
 
-# $Id: p4-fstat,v 1.5 2017/07/06 02:21:20 friedman Exp $
+# $Id: p4-fstat,v 1.6 2017/07/07 00:28:01 friedman Exp $
 
 # Commentary:
 
@@ -79,10 +79,8 @@ sub parse_options
       'R=s@'          => $pthrough,
       'S=s@'          => $pthrough,
 
-      "H|have"        => sub { push @flags, "-Rh" },
-      "o|opened"      => sub { push @filter, "action=*" },
-                         # Won't catch files open for add w/out -e changeno
-                         #sub { push @flags, "-Ro" },
+      "H|have"        => \$opt{have},
+      "o|opened"      => \$opt{opened},
       "e|exists"      => sub { push @filter,
                                  (qw(^headAction=delete
                                      ^headAction=move/delete
@@ -97,6 +95,16 @@ sub parse_options
 
   pod2usage (-exitstatus => 1, -verbose => 0)     unless $succ;
   pod2usage (-exitstatus => 0, -verbose => $help) if $help >= 0;
+
+  if ($opt{opened})
+    {
+      # This won't catch files open for add w/out -e changeno, which means
+      # they've already been shelved.  But without it, this command can be
+      # very slow.  So if --have is also specified, use it.
+      if ($opt{have}) { push @flags, "-Ro" }
+      else            { push @filter, "action=*"; }
+    }
+  elsif ($opt{have}) { push @flags, "-Rh"; }
 
   if ($opt{verbose})
     {
