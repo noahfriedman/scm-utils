@@ -4,7 +4,7 @@
 # Created: 2016-08-18
 # Public domain
 
-# $Id: p4-fstat,v 1.4 2017/04/27 01:09:05 friedman Exp $
+# $Id: p4-fstat,v 1.5 2017/07/06 02:21:20 friedman Exp $
 
 # Commentary:
 
@@ -33,14 +33,16 @@ my @flags;
 my @filter;
 
 # Fields we request from server
-my @fieldsT = (qw(depotFile clientFile path  haveRev
-                  headAction headChange headRev headType headModTime
-                      action     change workRev     type headTime));
+# headTime is the time of the changelist
+# headModTime is the modification time of the file, which might be older.
+# revtime is only set for shelved files; it's the modtime of the file in the shelf.
+my @fieldsT = (qw(depotFile clientFile path haveRev shelved
+                  headAction headChange headRev headType headModTime headTime
+                      action     change workRev     type     revtime));
 
-# Fields we print per row, in order
-my @fieldsP = (qw(headAction headChange headRev));
-# Fields we print per row if file is open
-my @fieldsO = (qw(action change workRev));
+
+my @fieldsP = (qw(headAction headChange headRev)); # fields/row we print
+my @fieldsO = (qw(    action    change  workRev)); # or these if file open
 
 # Fields which are right-justified
 my @fieldRJ = (undef, 0, 1, 1); # first undef is for clientFile/depotFile
@@ -79,12 +81,13 @@ sub parse_options
 
       "H|have"        => sub { push @flags, "-Rh" },
       "o|opened"      => sub { push @filter, "action=*" },
-                         # Doesn't catch files opened for add
+                         # Won't catch files open for add w/out -e changeno
                          #sub { push @flags, "-Ro" },
       "e|exists"      => sub { push @filter,
                                  (qw(^headAction=delete
                                      ^headAction=move/delete
                                      ^headAction=purge
+                                     ^headAction=archive
                                    ));
                              },
 
@@ -97,9 +100,11 @@ sub parse_options
 
   if ($opt{verbose})
     {
-      push @fieldsP, (qw(headType headTime));
-      push @fieldsO, (qw(type     headTime));
       $strftime_fmt = "%Y-%m-%d %H:%M:%S" if $opt{verbose} > 1;
+      my $mtime = $opt{verbose} > 2 ? 'headModTime' : 'headTime';
+
+      push @fieldsP, 'headType', $mtime;
+      push @fieldsO, 'type',     $mtime;
     }
 }
 
@@ -182,7 +187,10 @@ sub main
         }
 
       substr ($row[3], 0, 0, '#');
-      $row[5] = strftime ($strftime_fmt, localtime ($row[5])) if @row > 5;
+      $row[5] = (defined $row[5] && $row[5] > 0
+                 ? strftime ($strftime_fmt, localtime ($row[5]))
+                 : "")
+        if @row > 5;
       prune_local ($row[0]) if $opt{localpath} > 1;
 
       for (my $i = 0; $i < @row; $i++)
