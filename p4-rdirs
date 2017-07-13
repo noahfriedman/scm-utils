@@ -4,7 +4,7 @@
 # Created: 2017-06-21
 # Public domain
 
-# $Id$
+# $Id: p4-rdirs,v 1.1 2017/07/05 18:35:08 friedman Exp $
 
 # Commentary:
 # Code:
@@ -31,7 +31,9 @@ sub parse_options
   p4_process_cmdline_options ($_[0]);
   local *ARGV = \@{$_[0]}; # modify our local arglist, not real ARGV.
 
-  my $pthrough = sub { push @p4_dirs_flags, join ("", '-', @_) };
+  my $pthrough = sub { pop @_ if $_[-1] eq '1';
+                       push @p4_dirs_flags, join ("", '-', @_)
+                     };
 
   my $parser = Getopt::Long::Parser->new;
   $parser->configure (qw(bundling autoabbrev no_ignore_case));
