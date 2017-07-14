@@ -1,0 +1,110 @@
+#!/usr/bin/env perl
+# p4-obliterate-shelf --- remove any files in shelf and delete changelist
+# Author: Noah Friedman <friedman@splode.com>
+# Created: 2017-07-13
+# Public domain
+
+# $Id$
+
+# Commentary:
+# Code:
+
+use strict;
+use warnings qw(all);
+
+use FindBin;
+use lib "$FindBin::Bin/../lib/perl";
+use lib "$ENV{HOME}/lib/perl";
+
+use Getopt::Long;
+use Pod::Usage;
+
+use NF::P4cmd    qw(:direct);
+
+our %opt = ( doit => 0 );
+
+sub parse_options
+{
+  my $help = -1;
+
+  p4_process_cmdline_options ($_[0]);
+  local *ARGV = \@{$_[0]}; # modify our local arglist, not real ARGV.
+
+  my $parser = Getopt::Long::Parser->new;
+  $parser->configure (qw(bundling autoabbrev no_ignore_case));
+  my $succ = $parser->getoptions
+    ( "debug"         => \$NF::P4cmd::DEBUG,
+      "h|?|help+"     => \$help,
+
+      "p=s"           => \$ENV{OVERRIDE_P4PORT},
+      "u=s"           => \$ENV{OVERRIDE_P4USER},
+      "y|yes"         => \$opt{doit},
+    );
+
+  pod2usage (-exitstatus => 1, -verbose => 0)     unless $succ;
+  pod2usage (-exitstatus => 0, -verbose => $help) if $help >= 0;
+}
+
+sub main
+{
+  parse_options (\@_);
+  my $err = 0;
+
+  for my $elt (p4 ([map { "describe -S -s $_" } @_], "run"))
+    {
+      if ($elt->{code} eq 'error')
+        {
+          print $elt->{data};
+          $err++;
+          next;
+        }
+
+      unless (exists $elt->{shelved})
+        {
+          print "$elt->{change} - not a shelf changelist.\n";
+          $err++;
+          next;
+        }
+
+      local $ENV{OVERRIDE_P4CLIENT} = $elt->{client};
+      local $ENV{OVERRIDE_P4USER}   = $elt->{user};
+      my $chg = $elt->{change};
+
+      if (exists $elt->{depotFile})
+        {
+          if ($opt{doit})
+            {
+              my @result = p4 (qw(shelve -d -c), $chg);
+              my $resp = $result[0]->{data};
+              $resp =~ s/^/$chg - / unless $resp =~ /$chg/;
+              print $resp, "\n";
+              if ($result[0]->{code} eq 'error')
+                {
+                  $err++;
+                  next;
+                }
+            }
+          else
+            {
+              print "Would delete shelved files in changelist $chg\n";
+            }
+        }
+
+      if ($opt{doit})
+        {
+          my @result = p4 (qw(change -d), $elt->{change});
+          $err++ if ($result[0]->{code} eq 'error');
+          print $result[0]->{data}, "\n";
+        }
+      else
+        {
+          print "Would delete empty changelist $chg\n";
+        }
+    }
+
+  print "Use -y to actually perform this operation.\n" if $err == 0;
+}
+
+main (@ARGV);
+
+# eof
