@@ -4,7 +4,7 @@
 # Created: 2017-06-21
 # Public domain
 
-# $Id: p4-rdirs,v 1.1 2017/07/05 18:35:08 friedman Exp $
+# $Id: p4-rdirs,v 1.2 2017/07/13 22:14:37 friedman Exp $
 
 # Commentary:
 # Code:
@@ -22,7 +22,7 @@ use Pod::Usage;
 use NF::P4cmd    qw(:direct);
 
 my @p4_dirs_flags;
-our %opt;
+our %opt = ( depth => 0 );
 
 sub parse_options
 {
@@ -44,6 +44,7 @@ sub parse_options
       "p=s"           => \$ENV{OVERRIDE_P4PORT},
       "u=s"           => \$ENV{OVERRIDE_P4USER},
 
+      "m|max|depth=i" => \$opt{depth},
       "l|leaf|leaves" => \$opt{leaf},
 
       map { $_ => $pthrough } (qw(D H
@@ -70,8 +71,10 @@ sub main
   my %dirs;
   my @args = @_ ? @_ : '.';
 
+  my $iter = 0;
   map { $dirs{$_} = undef } @args
-    while (@args = p4_dirs (@args));
+    while (($opt{depth} <= 0 || $iter++ < $opt{depth})
+           && (@args = p4_dirs (@args)));
 
   my @dirs = sort keys %dirs;
   if ($opt{leaf})
