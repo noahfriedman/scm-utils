@@ -4,7 +4,7 @@
 # Created: 2016-08-18
 # Public domain
 
-# $Id: p4-fstat,v 1.6 2017/07/07 00:28:01 friedman Exp $
+# $Id: p4-fstat,v 1.7 2017/07/07 18:52:02 friedman Exp $
 
 # Commentary:
 
@@ -119,7 +119,7 @@ sub parse_options
 sub p4cmd
 {
   my @data = p4 (@_);
-  die unless @data;
+  return unless @data;
   die $data[0]->{data} if $data[0]->{code} eq 'error' && @data == 1 ;
   return @data;
 }
