@@ -1,6 +1,8 @@
 #!/usr/bin/env perl
-# $Id: p4-swarm-reviews,v 1.8 2016/09/27 21:45:03 friedman Exp $
+# $Id: p4-swarm-reviews,v 1.9 2017/07/22 02:16:24 friedman Exp $
 
+use FindBin;
+use lib "$FindBin::Bin/../../../lib/perl";
 use lib "$ENV{HOME}/lib/perl";
 
 
