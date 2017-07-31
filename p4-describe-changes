@@ -4,7 +4,7 @@
 # Created: 2014-11-13
 # Public domain.
 
-# $Id: p4-describe-changes,v 1.10 2017/05/04 23:40:29 friedman Exp $
+# $Id: p4-describe-changes,v 1.11 2017/07/07 00:10:19 friedman Exp $
 
 # Commentary:
 # Code:
@@ -447,9 +447,9 @@ sub main
   parse_options (\@_);
 
   my (@changelist, @option, @path);
-  map { if    (/^\d+$/) { push @changelist, $_ }
-        elsif (/^-/)    { push @option,     $_ }
-        else            { push @path,       $_ }
+  map { if (/^[,\s\d]+$/) { push @changelist, split (/[,\s]+/, $_) }
+        elsif (/^-/)      { push @option,     $_ }
+        else              { push @path,       $_ }
       } @_;
   push @changelist, get_changes (\@path, @option) if @path;
 
