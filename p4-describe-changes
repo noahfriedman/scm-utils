@@ -4,15 +4,16 @@
 # Created: 2014-11-13
 # Public domain.
 
-# $Id: p4-describe-changes,v 1.11 2017/07/07 00:10:19 friedman Exp $
+# $Id: p4-describe-changes,v 1.12 2017/07/31 21:10:59 friedman Exp $
 
 # Commentary:
 # Code:
 
 use strict;
+use warnings qw(all);
 
 use FindBin;
-use lib "$FindBin::Bin/../lib/perl";
+use lib "$FindBin::Bin/../../lib/perl";
 use lib "$ENV{HOME}/lib/perl";
 
 use Getopt::Long;
@@ -27,6 +28,7 @@ use constant { FL_CHG   => 0,
                FL_EREV  => 3,
                FL_HOW   => 4,
                FL_REV   => 5,
+               FL_TYPE  => 6,
              };
 
 my %opt = ( traditional => 0,
@@ -35,6 +37,7 @@ my %opt = ( traditional => 0,
             show_files  => 1,
             show_jobs   => 1,
             show_size   => 0,
+            show_type   => 0,
             reverse     => 0,
           );
 
@@ -45,46 +48,42 @@ sub parse_options
   p4_process_cmdline_options ($_[0]);
   local *ARGV = \@{$_[0]}; # modify our local arglist, not real ARGV.
 
+  my $pthrough = sub { push @{$opt{changesflags}}, join ("", '-', @_) };
+
   my $parser = Getopt::Long::Parser->new;
   $parser->configure (qw(bundling autoabbrev no_ignore_case));
   my $succ = $parser->getoptions
-    ( "debug"           => \$NF::P4cmd::DEBUG,
-      "h|?|help+"       => \$help,
-      "r|reverse"       => \$opt{reverse},
+    ( "debug"            => \$NF::P4cmd::DEBUG,
+      "h|?|help+"        => \$help,
 
-      "t|traditional!"  => \$opt{traditional},
-      "i|integrations!" => \$opt{show_integs},
-      "d|descriptions!" => \$opt{show_desc},
-      "f|files!"        => \$opt{show_files},
-      "j|jobs!"         => \$opt{show_jobs},
-      "s|size!"         => \$opt{show_size},
-      "recursion!"      => \$opt{recur},
+      "c|client=s"       => $pthrough,
+      "m|max=i"          => $pthrough,
+      "s|status=s"       => $pthrough,
+      "u|user=s"         => $pthrough,
+
+      "d|descriptions!"  => \$opt{show_desc},
+      "f|files!"         => \$opt{show_files},
+      "i|integrations!"  => \$opt{show_integs},
+      "j|jobs!"          => \$opt{show_jobs},
+      "r|reverse!"       => \$opt{reverse},
+      "t|type|filetype!" => \$opt{show_type},
+      "z|size!"          => \$opt{show_size},
+
+      "recursion!"       => \$opt{recur},
+      "traditional!"     => \$opt{traditional},
 
       # The long options above are automatically negated
-      "T"               => sub { $opt{traditional} = 0 },
-      "I!"              => sub { $opt{show_integs} = 0 },
-      "D"               => sub { $opt{show_desc}   = 0 },
-      "F"               => sub { $opt{show_files}  = 0 },
-      "J"               => sub { $opt{show_jobs}   = 0 },
-      "S"               => sub { $opt{show_size}   = 0 },
-      "R"               => sub { $opt{recur}       = 0 },
+      "D"                => sub { $opt{show_desc}   = 0 },
+      "F"                => sub { $opt{show_files}  = 0 },
+      "I"                => sub { $opt{show_integs} = 0 },
+      "J"                => sub { $opt{show_jobs}   = 0 },
+      "R"                => sub { $opt{reverse}     = 0 },
+      "T"                => sub { $opt{show_type}   = 0 },
+      "Z"                => sub { $opt{show_size}   = 0 },
     );
 
   pod2usage (-exitstatus => 1, -verbose => 0)     unless $succ;
   pod2usage (-exitstatus => 0, -verbose => $help) if $help >= 0;
-
-  if ($opt{traditional}
-      && ($opt{show_integs}
-          || $opt{show_size}
-          || !$opt{show_desc}
-          || !$opt{show_files}
-          || !$opt{show_jobs}))
-    {
-      (my $progname = $0) =~ s=.*/==;
-      pod2usage (-message => "$progname: --traditional may not be used with any other formatting options.\n",
-                 -exitval => 1,
-                 -verbose => 0);
-    }
 }
 
 sub p4error
@@ -102,13 +101,26 @@ sub p4error
   return $errorcount;
 }
 
+sub uniq
+{
+  my (%seen, @l);
+  map { push @l, $_ unless exists $seen{$_}; $seen{$_} = 1; } @_;
+  return @l;
+}
+
 sub get_changes
 {
-  my $list = shift;
+  my $list = shift if ref $_[0];
 
   my @args = @_;
   unshift @args, "-i" if $opt{recur};
-  map { p4error ($_) ? () : $_->{change} } p4 ($list, "changes", @args);
+  unshift @args, @{$opt{changesflags}} if $opt{changesflags};
+
+  # Return only 1 instance of each change number.
+  # There might be duplicates if multiple files listed explicitly were
+  # modified in the same change.
+  uniq (map { p4error ($_) ? () : $_->{change}
+            } p4 (($list || ()), "changes", @args));
 }
 
 sub get_describe
@@ -147,6 +159,7 @@ sub get_filelog
         {
           my $change = $elt->{change}->[$i];
           my $rev    = $elt->{rev}->[$i];
+          my $type   = $elt->{type}->[$i];
 
           my @fdata = ($change);
           if (exists $elt->{file} && defined $elt->{file}->[$i])
@@ -155,6 +168,7 @@ sub get_filelog
               ($fdata[FL_SREV] = $elt->{srev}->[$i]->[0]) =~ s/#//;
               ($fdata[FL_EREV] = $elt->{erev}->[$i]->[0]) =~ s/#//;
                $fdata[FL_HOW]  = $elt->{how}->[$i]->[0];
+               $fdata[FL_TYPE] = $type;
             }
           $flog{$depotFile}->{$rev} = \@fdata;
         }
@@ -164,6 +178,7 @@ sub get_filelog
 
 my $fstat_fields = join (",", (qw(depotFile
                                   headRev
+                                  headType type
                                   resolveAction0
                                   resolveFromFile0
                                   resolveStartFromRev0
@@ -186,6 +201,7 @@ sub get_shelved_fstat
       $fdata[FL_EREV] = $elt->{resolveEndFromRev}->[0];
       $fdata[FL_HOW]  = $elt->{resolveAction}->[0];
       $fdata[FL_REV]  = $elt->{headRev} || 1;  # Branched files are first rev
+      $fdata[FL_TYPE] = $elt->{type};
 
       $result{$elt->{depotFile}} = \@fdata;
     }
@@ -321,22 +337,23 @@ sub integ_of
   my $rev_list = $file_tbl->{$rev};
   return unless $rev_list && @$rev_list > 1;
 
-  my $chg  = $rev_list->[FL_CHG];
-  my $how  = $rev_list->[FL_HOW];
-  my $from = $rev_list->[FL_FILE];
   my $srev = $rev_list->[FL_SREV];
   my $erev = $rev_list->[FL_EREV];
-
   my $range = "";
   $srev = 0 if $srev eq 'none';
   $srev++; # not sure why this is always 1 less than inclusive range
   $range .= "#$srev," unless $erev eq $srev;
   $range .= "#$erev";
 
-  return ($how, $chg, $from, $range);
+  my @result = ($rev_list->[FL_HOW],
+                $rev_list->[FL_CHG],
+                $rev_list->[FL_FILE],
+                $range);
+  push @result, $rev_list->[FL_TYPE] if $opt{show_type};
+  return @result;
 }
 
-# This is slightly different from the standard output from p4
+# This is very different from the standard output from p4
 sub describe_change
 {
   my ($change, $integs) = @_;
@@ -371,7 +388,7 @@ sub describe_change
       for (my $i = 0; $i < @$job; $i++)
         {
           my ($j, $s) = ($job->[$i], $jst->[$i]);
-          $j .= sprintf ("(*%s*)", $s) unless $s eq 'fixed';
+          $j .= sprintf ("(%s)", $s) unless $s eq 'closed' || $s eq 'fixed';
           push @joblist, $j;
         }
       print "\tJobs: ", join (" ", @joblist), "\n\n";
@@ -385,38 +402,54 @@ sub describe_change
 
   if ($opt{show_files})
     {
-      my $tmpl   = "\t%3s %-5s  %-11s  %s\n";
-      my $tmplsz = "\t%3s %-5s  %-11s  %5s  %s\n";
+      my $tmpl = "\t%3s %-5s  %-11s";
+      $tmpl .= "  %-11s"        if $opt{show_type};
+      $tmpl .= "  %5s"          if $opt{show_size};
+      $tmpl .= "  %s\n";
+
+      my $ifmt = '%-11s';
+      $ifmt .= '  %5$-11s'      if $opt{show_type};
+      $ifmt .= '  ' . (' ' x 5) if $opt{show_size};
+      $ifmt .= '  %3$s%4$s (@%2$s)';
+
       my $sztotal = 0;
+      my @val;
 
       map { my $rev    = shift @{$change->{rev}};
             my $action = shift @{$change->{action}};
+            my $type   = shift @{$change->{type}};
             my @integ;
+
+            @val = ('...', '#' . $rev, $action);
+            push @val, $type if $opt{show_type};
 
             if ($opt{show_size})
               {
                 my $size = shift @{$change->{fileSize}};
                 $sztotal += $size if defined $size;
-
-                printf($tmplsz, '...', '#' . $rev, $action, fmtsize ($size), $_);
-              }
-            else
-              {
-                printf($tmpl, '...', '#' . $rev, $action, $_);
+                push @val, fmtsize ($size);
               }
 
-            if ($integs
-                && (@integ = integ_of ($integs, $changeno, $_, $rev)))
+            push @val, $_;
+            printf $tmpl, @val;
+
+            if ($integs && (@integ = integ_of ($integs, $changeno, $_, $rev)))
               {
-                my $s = sprintf ("%s %s %s%s", @integ);
-                printf ($tmpl, '', '', $s, '');
+                map { $_ = "" } @val;  # set all to empty string
+                $val[2] = sprintf ($ifmt, @integ);
+                printf $tmpl, @val;
               }
-            print "\n" if $integs->{$changeno};
+            # This produces too much vertical whitespace for my tastes
+            #print "\n" if $integs->{$changeno};
 
           } @{$change->{depotFile}};
+
       if ($opt{show_size} && $sztotal > 0 && @{$change->{depotFile}} > 1)
         {
-          printf($tmplsz, '', '', '', fmtsize ($sztotal), 'Total');
+          map { $_ = "" } @val;  # set all to empty string
+          $val[3 + $opt{show_type}] = fmtsize ($sztotal);
+          $val[4 + $opt{show_type}] = 'Total';
+          printf $tmpl, @val;
         }
 
       print "\n";
@@ -451,7 +484,20 @@ sub main
         elsif (/^-/)      { push @option,     $_ }
         else              { push @path,       $_ }
       } @_;
-  push @changelist, get_changes (\@path, @option) if @path;
+
+  unless (@path || @changelist || $opt{changesflags})
+    {
+      print STDERR
+        "Cowardly refusing to print the complete revision history of the server.\n",
+        "Provide some combination of --status, --user, --client, or --max flags,\n",
+        "a change number, or file pattern.\n";
+      exit (1);
+    }
+
+  if    (@path)         { push @changelist, get_changes (\@path, @option) }
+  elsif (! @changelist) { push @changelist, get_changes (@option) }
+
+  return unless @changelist;
 
   if ($opt{traditional})
     {
@@ -488,13 +534,22 @@ __END__
 
 =head1 SYNOPSIS
 
-     {--debug}             {-?|-h|--help}            {-r|--reverse}
-     {-t|--traditional}    {-T|--no-traditional}     {--p4user   USER}
-     {-i|--integrations}   {-I|--no-integrations}    {--p4port   PORT}
-     {-d|--descriptions}   {-D|--no-descriptions}    {--p4client CLIENT}
-     {-f|--files}          {-F|--no-files}           {--p4dir    DIR}
-     {-s|--size}           {-S|--no-size}            {--p4host   HOST}
+     {--debug}             {-?|-h|--help}
+     {-d|--descriptions}   {-D|--no-descriptions}
+     {-f|--files}          {-F|--no-files}
+     {-i|--integrations}   {-I|--no-integrations}
      {-j|--jobs}           {-J|--no-jobs}
+     {-r|--reverse}        {-R|--no-reverse}
+     {-t|--filetype}       {-T|--no-filetype}
+     {-z|--size}           {-Z|--no-size}
+
+     {--traditional}       {--no-traditional}
+
+     {--p4user    USER}    {-u|--user   CHANGE-USER}
+     {--p4client  CLIENT}  {-c|--client CHANGE-CLIENT}
+     {--p4port    PORT}    {-s|--status CHANGE-STATUS}
+     {--p4dir     DIR}     {-m|--max    CHANGE-COUNT}
+     {--p4host    HOST}
 
      ... changelists or files
 
@@ -505,22 +560,15 @@ __END__
 
 Long-format options may be abbreviated as long as the result is not ambiguous.
 
-If you need to pass options through to C<p4 changes>, e.g. C<-m1>, specify
-them after the C<--> parameter to end this script's own option processing.
-
 =over 8
 
-=item B<-r>, B<--reverse>
+=item B<-d>, B<--descriptions>			(default)
 
-Display changes from oldest to newest.
-By default, changes are displayed from newest to oldest.
+Display the description of the change.
 
-=item B<-t>, B<--traditional>
+=item B<-f>, B<--files>				(default)
 
-Use builtin C<p4 describe> output format instead of slightly modified custom
-format implemented in this script.
-
-If this option is specified, none of the options below may be used.
+Display the files associated with the change.
 
 =item B<-i>, B<--integrations>
 
@@ -528,15 +576,27 @@ Show which changes, if any, were integrated into each change and display
 which origin each submitted file was integrated, branched, copied, or
 merged from.
 
-=item B<-d>, B<--descriptions>
+=item B<-j>, B<--jobs>				(default)
 
-Display the description of the change.  This is the default.
+Display the job names fixed by the change.
 
-=item B<-f>, B<--files>
+=item B<-r>, B<--reverse>
 
-Display the files associated with the change.  This is the default.
+Display changes from lowest (oldest) to highest (newest).
 
-=item B<-s>, B<--size>
+=item B<--traditional>
+
+Use builtin C<p4 describe> output format instead of slightly modified custom
+format implemented in this script.
+
+If this option is specified, all of the descriptions, files, integrations,
+jobs, filetype, and size options are ignored.
+
+=item B<-t>, B<--type>, B<--filetype>
+
+Show the type of the file (e.g. C<text>, C<binary+x>), at its specified revision.
+
+=item B<-z>, B<--size>
 
 Display the size of each file in the changelist, if they have one
 (e.g. deleted files don't), and a total sum at the end if there is more
@@ -544,24 +604,11 @@ than one file.
 
 This option only has effect if B<--files> is enabled.
 
-=item B<-j>, B<--jobs>
-
-Display the job names fixed by the change.  This is the default.
-
 =back
 
 The inverse options are as follows.
 
 =over 8
-
-=item B<-T>, B<--no-traditional>
-
-Do not use builtin C<p4 describe> formatting.  This is the default.
-
-=item B<-I>, B<--no-integrations>
-
-Do not display changes or files integrated into the change.
-This is the default.
 
 =item B<-D>, B<--no-descriptions>
 
@@ -575,13 +622,57 @@ If this option is combined with B<--integrations>, the output will include
 a list of the integrated changes but will not display the individual files
 from those changes.
 
-=item B<-S>, B<--no-size>
+=item B<-I>, B<--no-integrations>		(default)
 
-Do not display file sizes in the file list.  This is the default.
+Do not display changes or files integrated into the change.
 
 =item B<-J>, B<--no-jobs>
 
 Do not display job names fixed by the change.
+
+=item B<-R>, B<--no-reverse>			(default)
+
+Display changes from highest (newest) to lowest (oldest).
+
+=item B<--no-traditional>			(default)
+
+Do not use builtin C<p4 describe> formatting.
+
+=item B<-T>, B<--no-type>, B<--no-filetype>	(default)
+
+Show the type of the file (e.g. C<text>, C<binary+x>), at its specified revision.
+
+=item B<-Z>, B<--no-size>			(default)
+
+Do not display file sizes in the file list.
+
+=back
+
+The following options filter the changelists to return.
+They are actually passed straight through to C<p4 changes>.
+
+If any of these options are specified, it's not necessary to specify
+changelists or file paths unless you want to further constrain the search.
+
+=over 8
+
+=item B<-c>, B<--client>=I<client>
+
+Limit changes to those created by the specified client only.
+
+=item B<-m>, B<--max>=I<count>
+
+Limit changes to the C<count> most recent.
+
+=item B<-s>, B<--status>=I<status>
+
+Limit the output to changelists with the specified C<status>.
+Recognized values include (but might not be limited to)
+C<pending>, C<shelved>, and C<submitted>.
+
+=item B<-u>, B<--user>=I<user>
+
+Display only changes owned by the specified user.
 
 =back
 
@@ -589,17 +680,17 @@ Do not display job names fixed by the change.
 
 The command
 
-    p4-describe-changes p14.2/...@\>2014/11/11,\<2014/11/12
+    p4-describe-changes //depot/p14.2/...@\>2014/11/11,\<2014/11/12
 
 performs essentially the more torturous equivalent of
 
-    p4 changes p14.2/...@\>2014/11/11,\<2014/11/12  | awk '{print $2}' | p4 -x - describe -s
+    p4 changes //depot/p14.2/...@\>2014/11/11,\<2014/11/12  | awk '{print $2}' | p4 -x - describe -s
 
 but with the same or easier-to-read results.
 
 The usual flags to C<p4 changes> work, e.g.
 
-    p4-describe-changes -- -s pending -u noahf //depot/main/...
+    p4-describe-changes -s pending -u noahf //depot/main/...
 
     p4-describe-changes 962492
 
