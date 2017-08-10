@@ -1,0 +1,39 @@
+#!/bin/sh
+# $Id$
+
+# TODO: convert this to a P4cmd perl script
+
+case $# in
+    0 ) echo Cowardly refusing to sync everything. 1>&2
+        exit 1 ;;
+esac
+
+p4 fstat -T clientFile,headAction,headChange "$@" |
+    while read dots field data; do
+        case $field in
+            *File   ) file=$data ;;
+            *Action )  act=$data ;;
+            *Change )  chg=$data ;;
+        esac
+        case $dots in ... ) continue ;; esac
+
+        case $act in
+            archive | purge ) echo Cannot sync ${act}d file "$file" 1>&2 ;;
+            *delete ) echo "$file"@$((chg - 1)) ;;
+            *       ) echo "$file"@$chg ;;
+        esac
+    done |
+    p4 -ztag -x - sync |
+    while read dots field data; do
+        case $field in
+            action     )  act=$data ;;
+            change     )  chg=$data ;;
+            clientFile ) file=$data ;;
+            rev        )  rev=$data ;;
+        esac
+        case $dots in ... ) continue ;; esac
+
+        printf "%-9s  %8d  %s#%s\n" "$act" "$chg" "$file" "$rev"
+    done
+
+# eof
