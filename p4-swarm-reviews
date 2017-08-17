@@ -1,5 +1,5 @@
 #!/usr/bin/env perl
-# $Id: p4-swarm-reviews,v 1.9 2017/07/22 02:16:24 friedman Exp $
+# $Id: p4-swarm-reviews,v 1.10 2017/07/22 02:17:58 friedman Exp $
 
 use FindBin;
 use lib "$FindBin::Bin/../../../lib/perl";
@@ -87,6 +87,14 @@ my $jira_host  = 'http://jira.perforce.com:8080';
 my $jira_user  = 'build';
 my $jira_pass  = 'rein4ce!';
 
+my $line_maxlen = (($ENV{TERM} eq 'emacs'
+                    || (($ENV{INSIDE_EMACS} || $ENV{EMACS})
+                        && $ENV{TERM} ne 'eterm'))
+                   ? 0
+                   # (- 80 (+ tab-width (length "Summary: ")))
+                   # where tab-width=8
+                   : 56);
+
 my @review_fields   = (qw(id author description
                           changes commits commitStatus
                           created updated
@@ -94,9 +102,67 @@ my @review_fields   = (qw(id author description
 
 my @activity_fields = (qw(id action user change streams));
 
+my @jira_issue_customfields;  # initialized later
+my %jira_issue_fields = ( 'Build Changelist(s)'    => 'bld_changes',
+                          'Release Changelists(s)' => 'rel_changes',
+                          'Release String'         => 'rel_version',
+                        );
+
+{ # create closure to hide $swarm from everything below
+  my $swarm;
+  sub swarm
+    {
+      return $swarm if $swarm;
+      $swarm = REST::Swarm->new ( host => $swarm_host );
+    }
+}
+
+{ # create closure to hide $jira from everything below
+  my $jira;
+  sub jira
+    {
+      return $jira if $jira;
+      $jira = REST::Jira->new (host => $jira_host,
+                               user => $jira_user,
+                               pass => $jira_pass, );
+    }
+}
+
+sub max
+{
+  my $x = shift;
+  map { $x = $_ if $_ > $x } @_;
+  return $x;
+}
+
 sub timefmt
 {
   strftime ("%Y-%m-%d %H:%M:%S %z (%a)", localtime ($_[0]));
+}
+
+sub fold_text
+{
+  local $_ = shift;
+  return unless defined $_;
+  return $_ if $line_maxlen < 22;       # vic20 line width!
+  return $_ if length ($_) < $line_maxlen;
+
+  s/\r//g;                              # CRLF -> LF
+  my @para = split (/\n\n+/, $_);       # Split paragraphs into separate chunks.
+
+  foreach $_ (@para)
+    {
+      # Remove all newlines, replacing any prior trailing whitespace on the
+      # previous line and leading whitespace on the next line with a single
+      # space.  This may be a no-op, since in my testing the input was
+      # already always a single line.
+      s/\s*\n\s*/ /g;
+
+      # split into lines no longer than $max but only at whitespace.
+      s/(.{1,$line_maxlen})(?:\s+|$)/$1\n/go;
+      s/\n$//s; # but remove final newline
+    }
+  return join ("\n\n", @para);          # rejoin paragraphs at the end.
 }
 
 sub parse_review
@@ -134,9 +200,19 @@ sub parse_review
           push @{$f->{commit_by}}, [ $f->{commits}->[0], $f->{author} ];
         }
 
-      $f->{jira} = $1
-        if (defined $review->{description}
-          && $review->{description} =~ m=(https?://\S*jira\S*/browse/[---a-z0-9]+)=i)
+      my $desc = $review->{description};
+      if (defined $desc)
+        {
+          if ($desc =~ m=(https?://\S*jira\S*/browse/)([---a-z0-9]+)=i)
+            {
+              $f->{jira} = [$2, $1.$2];
+
+              my $j = jira_issue ($2);
+              map { $f->{$_} = $j->{$_} } keys %$j if $j;
+            }
+
+          $f->{summary} = $1 if ($desc =~ m=^(.+)$=m);
+        }
     }
 }
 
@@ -188,6 +264,8 @@ sub prune_needed
 sub printr
 {
   my $label = shift;
+  my $deflabelwidth = 14;
+  my $prefix = "\t";
 
   my @a = map { if (ref $_ eq 'ARRAY')
                   {
@@ -200,8 +278,16 @@ sub printr
                   { $_ }
               } @_;
 
-  my $s = sprintf ("\t%-14s %s\n", $label, join (" ", @a));
-  substr ($s, length ($label) + 1, 1) = ":";
+  my $data = fold_text (join (" ", @a));
+  if ($data =~ /\n/)
+    {
+      my $nspc = max ($deflabelwidth + 1, length ($label));
+      my $indent = $prefix . (" " x $nspc);
+      $data =~ s/\n/\n$indent/g;
+    }
+
+  my $s = sprintf ("%s%-*s %s\n", $prefix, $deflabelwidth, $label, $data);
+  substr ($s, length ($label) + length ($prefix), 1) = ":";
   print $s;
 }
 
@@ -211,7 +297,13 @@ sub print_review
 
   printf "%s/reviews/%s\n", $swarm_host, $id;
 
-  printr ("JIRA", $1) if $data->{jira} && $data->{jira} =~ m=.*/(.*)$=;
+  printr ("Summary", $data->{summary}) if $data->{summary};
+
+  printr ("Version",     $data->{rel_version}) if $data->{rel_version};
+  printr ("Bld changes", $data->{bld_changes}) if $data->{bld_changes};
+  printr ("Rel changes", $data->{rel_changes}) if $data->{rel_changes};
+
+  printr ("JIRA", join ("\n", @{$data->{jira}})) if $data->{jira};
 
   printr ("Requested by", $data->{review_for})
     if $data->{review_for} && $data->{review_for} ne $data->{author};
@@ -245,7 +337,7 @@ sub print_review
   print "\n";
 }
 
-sub search
+sub swarm_search
 {
   my ($swarm, $need, $found, $fields) = (shift, shift, shift, shift);
   my $reviews = $swarm->search (fields => $fields, @_);
@@ -256,14 +348,38 @@ sub search
     }
 }
 
+sub jira_issue
+{
+  my $task = shift;
+  my $jira = jira();
+
+  @jira_issue_customfields = $jira->customfield (keys %jira_issue_fields)
+    unless @jira_issue_customfields;
+
+  my $result = $jira->issue ($task, fields => \@jira_issue_customfields);
+  return unless $result;
+
+  my $fields = $jira->renamed_customfields ($result);
+  for my $key (keys %$fields)
+    {
+      my $newkey = $jira_issue_fields{$key};
+      my $newval = $fields->{$key};
+
+      # sort and uniq changelists
+      if ($newval =~ /^[\d,\s]+$/)
+        {
+          my %tem = map { $_ => 1 } split (/[,\s]+/, $newval);
+          $newval = join (" ", sort keys %tem);
+        }
+      $fields->{$newkey} = $newval;
+      delete $fields->{$key};
+    }
+  return $fields;
+}
+
 sub jira_issue_reviews
 {
-  my $jira = REST::Jira->new (host => $jira_host,
-                              user => $jira_user,
-                              pass => $jira_pass,
-                             );
-
-  my $result = $jira->issue_remotelinks (@_);
+  my $result = jira()->issue_remotelink (@_);
   my @review;
   for my $remote (@$result)
     {
@@ -307,12 +423,12 @@ sub main
       exit 1;
     }
 
-  my $swarm = REST::Swarm->new ( host => $swarm_host );
   my %need = (map { $_ => undef } @list);
   my %found;
 
-  search ($swarm, \%need, \%found, \@review_fields, ids => \@list);
-  search ($swarm, \%need, \%found, \@review_fields, change => [keys %need])
+  my $swarm = swarm();
+  swarm_search ($swarm, \%need, \%found, \@review_fields, ids => \@list);
+  swarm_search ($swarm, \%need, \%found, \@review_fields, change => [keys %need])
     if %need;
 
   my @stream = map { "review-$_" } sort keys %found;
