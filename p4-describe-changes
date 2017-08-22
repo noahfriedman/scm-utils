@@ -4,7 +4,7 @@
 # Created: 2014-11-13
 # Public domain.
 
-# $Id: p4-describe-changes,v 1.12 2017/07/31 21:10:59 friedman Exp $
+# $Id: p4-describe-changes,v 1.13 2017/08/04 00:34:20 friedman Exp $
 
 # Commentary:
 # Code:
@@ -442,7 +442,7 @@ sub describe_change
             # This produces too much vertical whitespace for my tastes
             #print "\n" if $integs->{$changeno};
 
-          } @{$change->{depotFile}};
+          } sort { lc $a cmp lc $b } @{$change->{depotFile}};
 
       if ($opt{show_size} && $sztotal > 0 && @{$change->{depotFile}} > 1)
         {
