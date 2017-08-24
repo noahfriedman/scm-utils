@@ -4,7 +4,7 @@
 # Created: 2014-11-13
 # Public domain.
 
-# $Id: p4-describe-changes,v 1.13 2017/08/04 00:34:20 friedman Exp $
+# $Id: p4-describe-changes,v 1.14 2017/08/22 18:04:04 friedman Exp $
 
 # Commentary:
 # Code:
@@ -55,6 +55,8 @@ sub parse_options
   my $succ = $parser->getoptions
     ( "debug"            => \$NF::P4cmd::DEBUG,
       "h|?|help+"        => \$help,
+
+      "p|p4port=s"       => \$ENV{OVERRIDE_P4PORT},
 
       "c|client=s"       => $pthrough,
       "m|max=i"          => $pthrough,
