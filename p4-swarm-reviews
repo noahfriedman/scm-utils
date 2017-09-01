@@ -1,5 +1,5 @@
 #!/usr/bin/env perl
-# $Id: p4-swarm-reviews,v 1.10 2017/07/22 02:17:58 friedman Exp $
+# $Id: p4-swarm-reviews,v 1.11 2017/08/17 04:23:18 friedman Exp $
 
 use FindBin;
 use lib "$FindBin::Bin/../../../lib/perl";
@@ -293,7 +293,7 @@ sub printr
 
 sub print_review
 {
-  my ($id, $data) = @_;
+  my ($id, $data, $desc) = @_;
 
   printf "%s/reviews/%s\n", $swarm_host, $id;
 
@@ -335,6 +335,7 @@ sub print_review
   printr ("Updated", timefmt ($data->{updated}));
 
   print "\n";
+  print $desc, "\n" if $desc;
 }
 
 sub swarm_search
@@ -389,6 +390,50 @@ sub jira_issue_reviews
   return @review;
 }
 
+sub bt # Like `foo` in bourne shell.
+{
+  my $fh;
+  eval
+    {
+      local $SIG{__DIE__}  = sub { return };
+      local $SIG{__WARN__} = sub { return };
+      open ($fh, "-|", @_) || die "exec: $_[0]: $!\n";
+    };
+  print(STDERR $@), return if $@;
+
+
+  local $/ = undef;
+  chomp (local $_ = <$fh>);
+  return $_;
+}
+
+sub p4_describe_changes
+{
+  my $found = shift;
+
+  # If a review has already been committed, then the files disappear from
+  # that shelf.  So try to use the commit change (if there is one) or the
+  # user's original shelf before swarm copied it into its own shelf, for
+  # the file list.
+  my %idmap;
+  while (my ($review, $data) = each %$found)
+    {
+      if    ($data->{commits}) { my @chg = reverse @{$data->{commits}};
+                                 $idmap{$chg[0]} = $review }
+      elsif ($data->{orig})    { $idmap{$data->{orig}} = $review }
+      else                     { $idmap{$review} = $review }
+    }
+
+  local $_ = eval { bt (qw(p4-describe-changes -Di), keys %idmap) };
+  return {} unless defined $_;
+  my %text;
+  $text{$1} = $2 while (/^\S+\s*(\d+).*?\n+(.+?)(?=(?:^\S|\Z))/gms);
+
+  my %desc = map { $idmap{$_} => $text{$_} } keys %text;
+  return \%desc;
+}
+
+
 sub main
 {
   local $ENV{NF_REST_DEBUG} = $ENV{SWARM_REVIEWS_DEBUG};
@@ -397,6 +442,8 @@ sub main
   # synchronized with regular output.
   STDOUT->autoflush(1);
   STDERR->autoflush(1);
+
+  my $show_files_p = (@_ && $_[0] eq "-f" ? shift : 0);
 
   my @list;
   for my $arg (@_)
@@ -442,7 +489,8 @@ sub main
   map { print STDERR "$_: no Swarm reference found.\n" } sort keys %need;
   print STDERR "\n" if %need;
 
-  map { print_review ($_, $found{$_}) } sort keys %found;
+  my $desc = p4_describe_changes (\%found) if $show_files_p;
+  map { print_review ($_, $found{$_}, $desc->{$_}) } sort keys %found;
 }
 
 main (@ARGV);
