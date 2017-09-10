@@ -4,7 +4,7 @@
 # Created: 2014-11-13
 # Public domain.
 
-# $Id: p4-describe-changes,v 1.15 2017/08/24 01:08:12 friedman Exp $
+# $Id: p4-describe-changes,v 1.16 2017/09/10 21:16:38 friedman Exp $
 
 # Commentary:
 # Code:
@@ -21,7 +21,6 @@ use Pod::Usage;
 use POSIX qw(strftime);
 
 use NF::P4cmd qw(:direct);
-use NF::PrintObject qw(:all);
 
 use constant { CL_depotFile  => 0,    FL_CHG   => 0,
                CL_rev        => 1,    FL_FILE  => 1,
