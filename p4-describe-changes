@@ -4,7 +4,7 @@
 # Created: 2014-11-13
 # Public domain.
 
-# $Id: p4-describe-changes,v 1.14 2017/08/22 18:04:04 friedman Exp $
+# $Id: p4-describe-changes,v 1.15 2017/08/24 01:08:12 friedman Exp $
 
 # Commentary:
 # Code:
@@ -21,15 +21,18 @@ use Pod::Usage;
 use POSIX qw(strftime);
 
 use NF::P4cmd qw(:direct);
+use NF::PrintObject qw(:all);
 
-use constant { FL_CHG   => 0,
-               FL_FILE  => 1,
-               FL_SREV  => 2,
-               FL_EREV  => 3,
-               FL_HOW   => 4,
-               FL_REV   => 5,
-               FL_TYPE  => 6,
-             };
+use constant { CL_depotFile  => 0,    FL_CHG   => 0,
+               CL_rev        => 1,    FL_FILE  => 1,
+               CL_action     => 2,    FL_SREV  => 2,
+               CL_type       => 3,    FL_EREV  => 3,
+               CL_fileSize   => 4,    FL_HOW   => 4,
+               CL_FL_HOW     => 5,    FL_REV   => 5,
+               CL_FL_CHG     => 6,    FL_TYPE  => 6,
+               CL_FL_FILE    => 7,    FL_MVTO  => 7,
+               CL_FL_RANGE   => 8,
+               CL_FL_TYPE    => 9,                   };
 
 my %opt = ( traditional => 0,
             show_integs => 0,
@@ -38,8 +41,7 @@ my %opt = ( traditional => 0,
             show_jobs   => 1,
             show_size   => 0,
             show_type   => 0,
-            reverse     => 0,
-          );
+            reverse     => 0, );
 
 sub parse_options
 {
@@ -143,6 +145,18 @@ sub get_describe
                   } p4 (\@shelved, qw(describe -S -s))
     if @shelved;
 
+  my @fields = (qw(depotFile rev action type fileSize));
+  for my $obj (@desc)
+    {
+      next unless exists $obj->{depotFile};
+      my $rowlist = $obj->{row} = [];
+      while (@{$obj->{depotFile}})
+        {
+          push @$rowlist, [map { shift @{$obj->{$_}} } @fields];
+        }
+      map { delete $obj->{$_} } @fields, 'digest';
+    }
+
   return @desc;
 }
 
@@ -185,6 +199,7 @@ my $fstat_fields = join (",", (qw(depotFile
                                   resolveFromFile0
                                   resolveStartFromRev0
                                   resolveEndFromRev0
+                                  movedFile movedRev
                                 )));
 sub get_shelved_fstat
 {
@@ -195,65 +210,81 @@ sub get_shelved_fstat
                    '-e', $change, '-T', $fstat_fields, '//...'))
     {
       next if p4error ($elt) || exists $elt->{desc};
-      next unless exists $elt->{resolveFromFile};
+      if (exists $elt->{resolveFromFile})
+        {
+          my @fdata = ($change);
+          $fdata[FL_FILE] = $elt->{resolveFromFile}->[0];
+          $fdata[FL_SREV] = $elt->{resolveStartFromRev}->[0];
+          $fdata[FL_EREV] = $elt->{resolveEndFromRev}->[0];
+          $fdata[FL_HOW]  = $elt->{resolveAction}->[0];
+          $fdata[FL_REV]  = $elt->{headRev} || $fdata[FL_EREV];  # Branched files are first rev
+          $fdata[FL_TYPE] = $elt->{type};
 
-      my @fdata = ($change);
-      $fdata[FL_FILE] = $elt->{resolveFromFile}->[0];
-      $fdata[FL_SREV] = $elt->{resolveStartFromRev}->[0] - 1; # mimic filelog
-      $fdata[FL_EREV] = $elt->{resolveEndFromRev}->[0];
-      $fdata[FL_HOW]  = $elt->{resolveAction}->[0];
-      $fdata[FL_REV]  = $elt->{headRev} || 1;  # Branched files are first rev
-      $fdata[FL_TYPE] = $elt->{type};
-
-      $result{$elt->{depotFile}} = \@fdata;
+          $result{$elt->{depotFile}} = \@fdata;
+        }
+      elsif (exists $elt->{movedFile})
+        {
+          my @fdata = ($change);
+          $fdata[FL_SREV] = '';
+          $fdata[FL_EREV] = '';
+          $fdata[FL_REV]  = $elt->{movedRev} || $elt->{headRev};
+          $fdata[FL_HOW]  = 'moved to';
+          $fdata[FL_MVTO] = $elt->{movedFile};
+          $result{$elt->{depotFile}} = \@fdata;
+        }
     }
   return \%result;
 }
 
+# This is complicated; I can barely follow it myself.
+# In order to track where files were integrated/branched/moved from or to,
+# we can consult the filelog for changelists that are already committed.
+# For shelved changes, those entries are not in the filelog yet; instead
+# they are accessible via fstat (with the right magic flags).
+# That gives you file version numbers.  If you want to get the changelist
+# for those versions, you have to run filelog again on those file
+# revisions!
 sub integ_map
 {
-  my %change;
+  my %integ;
   my %shelve;
 
   for my $elt (@_)
     {
       next if p4error ($elt);
-      next unless exists $elt->{rev};  # no files in change
 
-      my $change    = $elt->{change};
-      my $depotFile = $elt->{depotFile};
+      next unless my $rowlist = $elt->{row}; # no files in change
+      my $change = $elt->{change};
 
       if (exists $elt->{shelved} && $elt->{status} eq 'pending')
         {
-          # Shelved files are a hairy mess.
-          # Get the fstat information and if there is any, then for each file
-          # that has a revision of "none", replace the element in %change
-          # with the fstat information and call that revision #1.
-
           my $fstat = $shelve{$change} = get_shelved_fstat ($change);
-          my $rev = $elt->{rev};
 
-          for (my $i = 0; $i < @$depotFile; $i++)
+          for my $row (@$rowlist)
             {
-              next unless $rev->[$i] eq 'none';
-              my $file = $fstat->{$depotFile->[$i]};
-              next unless defined $file;
-              $rev->[$i] = $file->[FL_REV];
+              next unless $row->[CL_rev] eq 'none';
+
+              my $depotFile = $row->[CL_depotFile];
+              my $file = $fstat->{$depotFile} or next;
+              $row->[CL_rev] = $file->[FL_REV];
             }
         }
-
-      my @rev = @{$elt->{rev}}; # make copy, since destroying
-      $change{$change} = { map { $_ => shift @rev } @$depotFile };
+      else
+        {
+          # These changes are already committed.
+          $integ{$change} = { map { $_->[CL_depotFile] => $_->[CL_rev]
+                                  } @$rowlist };
+        }
     }
 
+  # Collect files and version information in preparation for filelog
   my @flist;
   map { while (my ($file, $rev) = each %$_)
           {
-            next if $rev eq 'none';
-            push @flist, $file . "#=" . $rev;
+            push @flist, $file . "#=" . $rev if $rev ne 'none';
           }
-      } values %change;
-  # Copy in the shelved file branch/integs
+      } values %integ;
+  # Copy in any fromfile information from shelves into the filelog.
   while (my ($change, $depotFile_tbl) = each %shelve)
     {
       while (my ($depotFile, $elt) = each %$depotFile_tbl)
@@ -263,16 +294,6 @@ sub integ_map
         }
     }
   my $filelog = get_filelog (\@flist);
-  # Copy in any fstat information from shelves into the filelog.
-  map { while (my ($depotFile, $elt) = each %$_)
-          {
-            my $rev = $elt->[FL_REV];
-            if (ref $filelog->{$depotFile} eq 'HASH')
-              { $filelog->{$depotFile}->{$rev} = $elt }
-            else
-              { $filelog->{$depotFile} = { $rev => $elt } }
-          }
-      } values %shelve;
 
   # Now get the change number of the source files.
   undef @flist;
@@ -300,7 +321,7 @@ sub integ_map
     }
 
   # Merge the filelog into the integ table.
-  while (my ($changeno, $depotFile_tbl) = each %change)
+  while (my ($changeno, $depotFile_tbl) = each %integ)
     {
       while (my ($depotFile, $revno) = each %$depotFile_tbl)
         {
@@ -310,34 +331,55 @@ sub integ_map
           else
             { delete $depotFile_tbl->{$depotFile} }
         }
-      delete $change{$changeno} unless %{$change{$changeno}};
+      delete $integ{$changeno} unless %{$integ{$changeno}};
     }
-  return \%change;
-}
 
-sub change_integs
-{
-  my ($tbl, $change) = @_;
+  # update integration changelists from fstat list
+  while (my ($shelfno, $depotFile_tbl) = each %shelve)
+    {
+      while (my ($depotFile, $elt) = each %$depotFile_tbl)
+        {
+          my $rev = $elt->[FL_REV];
 
-  my $depotFile_tbl = $tbl->{$change};
-  my %integs = ( map { map { $_ && @$_ > 1 ? ($_->[FL_CHG] => 1) : ();
-                           } values %$_;
-                     } values %$depotFile_tbl);
-  sort keys %integs;
+          if (ref $filelog->{$depotFile} eq 'HASH')
+            { $filelog->{$depotFile}->{$rev} = $elt }
+          else
+            { $filelog->{$depotFile} = { $rev => $elt } }
+
+          $integ{$shelfno}->{$depotFile} = $filelog->{$depotFile};
+
+          my $file = $elt->[FL_FILE]          or next;
+          my $flog = $filelog->{$file}        or next;
+          my $erev = $flog->{$elt->[FL_EREV]} or next;
+          $elt->[FL_CHG] = $erev->[FL_CHG];
+        }
+    }
+
+  # Finally, merge the integration information into each changelist depotFile row.
+  for my $elt (@_)
+    {
+      next if p4error ($elt);
+
+      my $rowlist = $elt->{row} or next;  # no files in change
+      my $changeno = $elt->{change};
+
+      for my $row (@$rowlist)
+        {
+          my $depotFile = $row->[CL_depotFile];
+          my $rev       = $row->[CL_rev];
+          push @$row, integ_of (\%integ, $changeno, $depotFile, $rev);
+        }
+    }
 }
 
 sub integ_of
 {
   my ($integs, $changeno, $file, $rev) = @_;
 
-  my $change_tbl = $integs->{$changeno};
-  return unless $change_tbl;
-
-  my $file_tbl = $change_tbl->{$file};
-  return unless $file_tbl;
-
-  my $rev_list = $file_tbl->{$rev};
-  return unless $rev_list && @$rev_list > 1;
+  my $change_tbl = $integs->{$changeno} or return;
+  my $file_tbl   = $change_tbl->{$file} or return;
+  my $rev_list   = $file_tbl->{$rev}    or return;
+  return unless @$rev_list > 1;
 
   my $srev = $rev_list->[FL_SREV];
   my $erev = $rev_list->[FL_EREV];
@@ -349,16 +391,28 @@ sub integ_of
 
   my @result = ($rev_list->[FL_HOW],
                 $rev_list->[FL_CHG],
-                $rev_list->[FL_FILE],
+                $rev_list->[FL_FILE] || $rev_list->[FL_MVTO],
                 $range);
   push @result, $rev_list->[FL_TYPE] if $opt{show_type};
   return @result;
 }
 
-# This is very different from the standard output from p4
+sub change_integs
+{
+  my ($change) = @_;
+
+  my %tbl;
+  for my $row (@{$change->{row}})
+    {
+      my $chgno = $row->[CL_FL_CHG] or next;
+      $tbl{$chgno} = undef;  # just vivify
+    }
+  sort keys %tbl;
+}
+
 sub describe_change
 {
-  my ($change, $integs) = @_;
+  my ($change) = @_;
   return unless $change->{code} eq 'stat';  # todo: print error messages
 
   my $stamp = strftime ("%Y-%m-%d %H:%M:%S %z", localtime ($change->{time}));
@@ -396,9 +450,9 @@ sub describe_change
       print "\tJobs: ", join (" ", @joblist), "\n\n";
     }
 
-  if ($integs)
+  if ($opt{show_integs})
     {
-      my @integs = change_integs ($integs, $changeno);
+      my @integs = change_integs ($change);
       print "\tIntegrated changes: @integs\n\n" if @integs;
     }
 
@@ -409,44 +463,51 @@ sub describe_change
       $tmpl .= "  %5s"          if $opt{show_size};
       $tmpl .= "  %s\n";
 
-      my $ifmt = '%-11s';
-      $ifmt .= '  %5$-11s'      if $opt{show_type};
-      $ifmt .= '  ' . (' ' x 5) if $opt{show_size};
-      $ifmt .= '  %3$s%4$s (@%2$s)';
+      my $m2fmt = '%-11s';
+      $m2fmt .= '  ' . (' ' x 11) if $opt{show_type};
+      $m2fmt .= '  ' . (' ' x  5) if $opt{show_size};
+      $m2fmt .= '  %3$s';
+
+      my $ifmt  = $m2fmt . '%4$s (@%2$s)';
 
       my $sztotal = 0;
       my @val;
 
-      map { my $rev    = shift @{$change->{rev}};
-            my $action = shift @{$change->{action}};
-            my $type   = shift @{$change->{type}};
-            my @integ;
+      for my $row (sort { lc $a->[CL_depotFile] cmp lc $b->[CL_depotFile]
+                        } @{$change->{row}})
+        {
+          my $depotFile = $row->[CL_depotFile];
+          my $rev       = $row->[CL_rev];
+          my $action    = $row->[CL_action];
+          my $type      = $row->[CL_type];
+          my $integ_how = $row->[CL_FL_HOW];
 
-            @val = ('...', '#' . $rev, $action);
-            push @val, $type if $opt{show_type};
+          @val = ('...', '#' . $rev, $action);
+          push @val, $type if $opt{show_type};
 
-            if ($opt{show_size})
-              {
-                my $size = shift @{$change->{fileSize}};
-                $sztotal += $size if defined $size;
-                push @val, fmtsize ($size);
-              }
+          if ($opt{show_size})
+            {
+              my $size = $row->[CL_fileSize];
+              $sztotal += $size if defined $size;
+              push @val, fmtsize ($size);
+            }
 
-            push @val, $_;
+            push @val, $depotFile;
             printf $tmpl, @val;
 
-            if ($integs && (@integ = integ_of ($integs, $changeno, $_, $rev)))
+            if ($opt{show_integs} && $integ_how)
               {
                 map { $_ = "" } @val;  # set all to empty string
-                $val[2] = sprintf ($ifmt, @integ);
+                my $fmt = ($integ_how eq 'moved to' ? $m2fmt : $ifmt);
+                $val[2] = sprintf ($fmt, @{$row}[CL_FL_HOW .. CL_FL_TYPE]);
                 printf $tmpl, @val;
               }
             # This produces too much vertical whitespace for my tastes
             #print "\n" if $integs->{$changeno};
 
-          } sort { lc $a cmp lc $b } @{$change->{depotFile}};
+        }
 
-      if ($opt{show_size} && $sztotal > 0 && @{$change->{depotFile}} > 1)
+      if ($opt{show_size} && $sztotal > 0 && @{$change->{row}} > 1)
         {
           map { $_ = "" } @val;  # set all to empty string
           $val[3 + $opt{show_type}] = fmtsize ($sztotal);
@@ -512,9 +573,9 @@ sub main
   else
     {
       my @desc   = get_describe (@changelist);
-      my $integs = integ_map (@desc) if $opt{show_integs};
+      integ_map (@desc) if $opt{show_integs};
 
-      map { describe_change ($_, $integs)
+      map { describe_change ($_)
           } sort { ($opt{reverse}
                     ? $a->{change} <=> $b->{change}
                     : $b->{change} <=> $a->{change});
