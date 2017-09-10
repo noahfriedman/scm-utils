@@ -1,5 +1,5 @@
 #!/usr/bin/env perl
-# $Id: p4-swarm-reviews,v 1.12 2017/09/01 01:32:14 friedman Exp $
+# $Id: p4-swarm-reviews,v 1.13 2017/09/05 20:29:01 friedman Exp $
 
 use FindBin;
 use lib "$FindBin::Bin/../../../lib/perl";
@@ -364,15 +364,17 @@ sub jira_issue
   for my $key (keys %$fields)
     {
       my $newkey = $jira_issue_fields{$key};
-      my $newval = $fields->{$key};
 
-      # sort and uniq changelists
-      if ($newval =~ /^[\d,\s]+$/)
+      if (my $newval = $fields->{$key})
         {
-          my %tem = map { $_ => 1 } split (/[,\s]+/, $newval);
-          $newval = join (" ", sort keys %tem);
+          # sort and uniq changelists
+          if ($newval =~ /^[\d,\s]+$/)
+            {
+              my %tem = map { $_ => 1 } split (/[,\s]+/, $newval);
+              $newval = join (" ", sort keys %tem);
+            }
+          $fields->{$newkey} = $newval;
         }
-      $fields->{$newkey} = $newval;
       delete $fields->{$key};
     }
   return $fields;
