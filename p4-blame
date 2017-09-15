@@ -4,14 +4,13 @@
 # Created: 2013-02-26
 # Public domain
 
-# $Id: p4-blame,v 1.5 2015/11/04 20:22:44 friedman Exp $
+# $Id: p4-blame,v 1.6 2017/07/07 01:21:30 friedman Exp $
 
 # Commentary:
 # Code:
 
 use strict;
 use warnings qw(all);
- no warnings qw(experimental::autoderef);  # for uniq
 
 use POSIX qw(strftime);
 
@@ -22,7 +21,7 @@ use lib "$ENV{HOME}/lib/perl";
 use NF::P4cmd qw(:direct);
 
 sub log10 { log ($_[0]) / log (10) }
-sub uniq  { keys { map { $_ => undef } @_ } }
+sub uniq  { my %x = map { $_ => undef } @_; keys %x }
 
 sub main
 {
