@@ -1,0 +1,152 @@
+#!/usr/bin/env perl
+# p4-dl --- download (print to files) remaining arguments
+# Author: Noah Friedman <friedman@splode.com>
+# Created: 2017-11-08
+# Public domain
+
+# $Id$
+
+# Commentary:
+# Code:
+
+use strict;
+use warnings qw(all);
+
+use FindBin;
+use lib "$FindBin::Bin/../lib/perl";
+use lib "$ENV{HOME}/lib/perl";
+
+use Getopt::Long;
+use Pod::Usage;
+use POSIX qw(strftime);
+
+use NF::P4cmd qw(:direct);
+
+our %opt = ( vchar => '@', );
+
+sub parse_options
+{
+  my $help = -1;
+
+  p4_process_cmdline_options ($_[0]);
+  local *ARGV = \@{$_[0]}; # modify our local arglist, not real ARGV.
+
+  my $parser = Getopt::Long::Parser->new;
+  $parser->configure (qw(bundling autoabbrev no_ignore_case));
+  my $succ = $parser->getoptions
+    ( "debug"         => \$NF::P4cmd::DEBUG,
+      "h|?|help+"     => \$help,
+
+      "a|all"         => \$opt{all},
+      "C|changelist"  => sub { $opt{vchar} = '@' },
+      "R|revision"    => sub { $opt{vchar} = '#' },
+
+      "p=s"           => \$ENV{OVERRIDE_P4PORT},
+      "u=s"           => \$ENV{OVERRIDE_P4USER},
+      "c=s"           => \$ENV{OVERRIDE_P4CLIENT},
+    );
+
+  pod2usage (-exitstatus => 1, -verbose => 0)     unless $succ;
+  pod2usage (-exitstatus => 0, -verbose => $help) if $help >= 0;
+}
+
+sub expand_range
+{
+  my @result = p4 (\@_, qw(fstat -Of));
+
+  my $vchar  = $opt{vchar};
+  my $verkey = { '@' => 'headChange',
+                 '#' => 'headRev',
+               }->{$vchar};
+
+  my %seen;
+  map { push @{$seen{$_->{depotFile}}}, [$_->{$verkey}, $_->{headModTime}];
+      } @result;
+
+  undef @result;
+  while (my ($depotFile, $rev) = each %seen)
+    {
+      if (@$rev > 1)
+        {
+          push @result, map { [$depotFile.$vchar.$_->[0], $_->[1]] } @$rev;
+        }
+      else
+        {
+          push @result, [$depotFile, $rev->[0]->[1]];
+        }
+    }
+
+  return unless @result;
+  return wantarray ? @result : \@result ;
+}
+
+sub expand_path
+{
+  my @result = p4 (\@_, 'fstat');
+  my @files = map { [$_->{depotFile}, $_->{headModTime}] } @result;
+  return unless @files;
+  return wantarray ? @files : \@files ;
+}
+
+sub main
+{
+  parse_options (\@_);
+
+  my @flist;
+  if ($opt{all})
+    {
+      push @flist, expand_range (@_);
+    }
+  else
+    {
+      for my $arg (@_)
+        {
+          if ($arg =~ /([#@])[_a-z\d]+,[#@]?[_a-z\d]+/i)
+            {
+              local $opt{vchar} = $1;
+              push @flist, expand_range ($arg);
+            }
+          else
+            {
+              push @flist, expand_path ($arg);
+            }
+        }
+    }
+
+  my $vchar  = $opt{vchar};
+  my $verkey = { '@' => 'change',
+                 '#' => 'rev',
+               }->{$vchar};
+  my $wmask = 0666 & ~(umask);
+  my $sortfn = sub { (my $aa = $a->[0]) =~ s=[#@].*==;
+                     (my $bb = $b->[0]) =~ s=[#@].*==;
+                     ($aa cmp $bb) || ($a->[1] <=> $b->[1]);
+                   };
+
+  for my $elt (sort $sortfn @flist)
+    {
+      my ($depotFile, $mtime) = @$elt;
+      (my $lfile = $depotFile) =~ s=.*/==;
+      my $res = (p4 (qw(print -q -o), $lfile, $depotFile))[0];
+      if ($res->{code} eq 'error')
+        {
+          print STDERR $res->{data}, "\n";
+          next;
+        }
+
+      my $fmt = "%s %s %s %s\n";
+      my $dfile = ($lfile =~ /[#@]/
+                   ? $depotFile
+                   : $res->{depotFile}.$opt{vchar}.$res->{$verkey});
+      my $mstr = strftime ("%Y-%m-%d %H:%M:%S %z", localtime ($mtime));
+      printf $fmt, $dfile, $mstr, $res->{type}, $res->{action};
+
+      my $perm = (stat $lfile)[2] & 07777;
+      chmod($perm | $wmask, $lfile);
+      utime ($mtime, $mtime, $lfile);
+    }
+}
+
+main (@ARGV);
+
+# eof
