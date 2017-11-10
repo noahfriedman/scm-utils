@@ -1,0 +1,150 @@
+#!/usr/bin/env perl
+# p4-nsync --- clientless sync
+# Author: Noah Friedman <friedman@splode.com>
+# Created: 2017-11-08
+# Public domain
+
+# $Id$
+
+# Commentary:
+
+# I am dreadfully sorry for this program name.
+
+# Code:
+
+use strict;
+use warnings qw(all);
+
+use FindBin;
+use lib "$FindBin::Bin/../lib/perl";
+use lib "$ENV{HOME}/lib/perl";
+
+use Getopt::Long;
+use Pod::Usage;
+use POSIX qw(strftime);
+
+use NF::FileUtil qw(:all);
+use NF::P4cmd qw(:direct);
+use NF::PrintObject qw(:all);
+
+sub parse_options
+{
+  my $help = -1;
+
+  p4_process_cmdline_options ($_[0]);
+  local *ARGV = \@{$_[0]}; # modify our local arglist, not real ARGV.
+
+  my $parser = Getopt::Long::Parser->new;
+  $parser->configure (qw(bundling autoabbrev no_ignore_case));
+  my $succ = $parser->getoptions
+    ( "debug"         => \$NF::P4cmd::DEBUG,
+      "h|?|help+"     => \$help,
+
+      "p=s"           => \$ENV{OVERRIDE_P4PORT},
+      "u=s"           => \$ENV{OVERRIDE_P4USER},
+    );
+
+  pod2usage (-exitstatus => 1, -verbose => 0)     unless $succ;
+  pod2usage (-exitstatus => 0, -verbose => $help) if $help >= 0;
+}
+
+sub _p4cmd
+{
+  my @result;
+  map { if ($_->{code} eq 'error') { print STDERR $_->{data} }
+        else                       { push @result, $_ }
+      } p4 (@_);
+  return wantarray ? @result : \@result;
+}
+
+my $fstat_filter = join (" & ", (qw(^headAction=delete
+                                    ^headAction=move/delete
+                                    ^headAction=purge
+                                    ^headAction=archive
+                                  )));
+my $fstat_fields = join (",", (qw(depotFile headRev headModTime)));
+sub p4_fstat { _p4cmd (\@_, qw(fstat -F), $fstat_filter, "-T", $fstat_fields) }
+sub p4_run   { _p4cmd (\@_, qw(run)) }
+
+sub max { my $m = shift; map { $m = $_ if $_ > $m } @_; $m }
+sub min { my $m = shift; map { $m = $_ if $_ < $m } @_; $m }
+
+sub longest_common_prefix
+{
+  my @p = split (m=/=, shift);
+  my $cdepth = scalar @p;
+  while (@_)
+    {
+      my @c = split (m=/=, shift);
+      my $m = max (scalar @p, scalar @c);
+      my $i = -1;
+      while (++$i < $m)
+        {
+          last unless $c[$i] eq $p[$i];
+        }
+      return 0 if $i <= 0;
+      $cdepth = $i if $i < $cdepth;
+      @p = @c;
+    }
+  return 0 if $cdepth <= 2;
+  my $last = join ("/", @p[0 .. $cdepth-2]);
+  return 1 + length ($last);
+}
+
+sub uniq
+{
+  my %u = map { $_ => undef } @_;
+  return keys %u;
+}
+
+sub dirnames   { map { (my $s = $_) =~ s=/[^/]+$==; $s } @_ }
+sub mkbasedirs { map { mkdirhier ($_) } uniq (dirnames (@_)) }
+
+sub fix_file_metadata
+{
+  my $wmask = 0666 & ~(umask);
+  for my $elt (@_)
+    {
+      my $file  = $elt->{_localFile};
+      my $mtime = $elt->{headModTime};
+
+      my $perm = (stat $file)[2] & 07777;
+      chmod($perm | $wmask, $file);
+      utime ($mtime, $mtime, $file);
+    }
+}
+
+sub main
+{
+  parse_options (\@_);
+
+  my @files = p4_fstat (@_);
+  exit (1) unless @files;
+  my @dfiles = map { $_->{depotFile} } @files;
+  my $prefix_len = longest_common_prefix (@dfiles);
+  map { $_->{_localFile} = substr ($_->{depotFile}, $prefix_len) } @files;
+
+  mkbasedirs (map { $_->{_localFile} } @files);
+
+  my @p;
+  map { my $d = join ("#", $_->{depotFile}, $_->{headRev});
+        my $l = $_->{_localFile};
+
+        if (-e $l)
+          { print STDERR "Skipping existing file $l <= $d\n" }
+        else
+          { push @p, "print -o $l $d\n" }
+      } @files;
+
+  my @res = p4 (\@p, "run");
+  map { my $d = join ("#", $_->{depotFile}, $_->{rev});
+        my $l = substr ($_->{depotFile}, $prefix_len);
+        printf "%s <= %s - %s %s \@%s\n", $l, $d, @{$_}{qw(action type change)};
+      } @res;
+
+  fix_file_metadata (@files);
+}
+
+main (@ARGV);
+
+# eof
