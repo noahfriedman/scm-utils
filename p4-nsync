@@ -4,7 +4,7 @@
 # Created: 2017-11-08
 # Public domain
 
-# $Id$
+# $Id: p4-nsync,v 1.1 2017/11/10 00:32:47 friedman Exp $
 
 # Commentary:
 
@@ -21,11 +21,12 @@ use lib "$ENV{HOME}/lib/perl";
 
 use Getopt::Long;
 use Pod::Usage;
-use POSIX qw(strftime);
+use POSIX qw(:errno_h);
 
-use NF::FileUtil qw(:all);
 use NF::P4cmd qw(:direct);
-use NF::PrintObject qw(:all);
+#use NF::PrintObject qw(:all);
+
+my %opt = ( verbose => 0, );
 
 sub parse_options
 {
@@ -39,6 +40,9 @@ sub parse_options
   my $succ = $parser->getoptions
     ( "debug"         => \$NF::P4cmd::DEBUG,
       "h|?|help+"     => \$help,
+
+      "q|quiet"       => sub { $opt{verbose} = -1 },
+      "v|verbose"     => sub { $opt{verbose} =  1 },
 
       "p=s"           => \$ENV{OVERRIDE_P4PORT},
       "u=s"           => \$ENV{OVERRIDE_P4USER},
@@ -62,12 +66,24 @@ my $fstat_filter = join (" & ", (qw(^headAction=delete
                                     ^headAction=purge
                                     ^headAction=archive
                                   )));
-my $fstat_fields = join (",", (qw(depotFile headRev headModTime)));
-sub p4_fstat { _p4cmd (\@_, qw(fstat -F), $fstat_filter, "-T", $fstat_fields) }
+my $fstat_fields = join (",",   (qw(depotFile
+                                    headRev
+                                    headChange
+                                    headAction
+                                    headType
+                                    headModTime
+                                    fileSize)));
+sub p4_fstat { _p4cmd (\@_, qw(fstat -Ol -F), $fstat_filter, "-T", $fstat_fields) }
 sub p4_run   { _p4cmd (\@_, qw(run)) }
 
 sub max { my $m = shift; map { $m = $_ if $_ > $m } @_; $m }
 sub min { my $m = shift; map { $m = $_ if $_ < $m } @_; $m }
+
+sub uniq
+{
+  my %u = map { $_ => undef } @_;
+  return keys %u;
+}
 
 sub longest_common_prefix
 {
@@ -91,14 +107,29 @@ sub longest_common_prefix
   return 1 + length ($last);
 }
 
-sub uniq
-{
-  my %u = map { $_ => undef } @_;
-  return keys %u;
-}
-
+sub topdirs    { map { (my $s = $_) =~ s=/.*==;     $s } @_ }
 sub dirnames   { map { (my $s = $_) =~ s=/[^/]+$==; $s } @_ }
 sub mkbasedirs { map { mkdirhier ($_) } uniq (dirnames (@_)) }
+
+sub mkdirhier
+{
+  for my $dir (@_)
+    {
+      next if -d $dir;
+      my @subdirs = split (m=(?<!^)/=, $dir);
+      my $d = "";
+      while (@subdirs)
+        {
+          $d .= shift @subdirs;
+          unless (mkdir ($d, 0777) || $! == EEXIST)
+            {
+              print STDERR "mkdirhier: $d: $!\n";
+              last;
+            }
+          $d .= '/';
+        }
+    }
+}
 
 sub fix_file_metadata
 {
@@ -109,9 +140,28 @@ sub fix_file_metadata
       my $mtime = $elt->{headModTime};
 
       my $perm = (stat $file)[2] & 07777;
-      chmod($perm | $wmask, $file);
+      chmod ($perm | $wmask, $file);
       utime ($mtime, $mtime, $file);
     }
+}
+
+sub fmtsize
+{
+  return '' unless defined $_[0] && $_[0] ne '0';
+
+  my $size   = shift;
+  my $fmtsize = 1024;
+  my @suffix = (qw(B K M G T P E));
+  my $idx = 0;
+
+  while ($size > $fmtsize)
+    {
+      $size /= $fmtsize;
+      $idx++;
+    }
+
+  my $fmtstr = $size < 100 && $idx != 0 ? "%.1f%s" : "%d%s" ;
+  return sprintf ($fmtstr, $size, $suffix[$idx]);
 }
 
 sub main
@@ -121,28 +171,54 @@ sub main
   my @files = p4_fstat (@_);
   exit (1) unless @files;
   my @dfiles = map { $_->{depotFile} } @files;
-  my $prefix_len = longest_common_prefix (@dfiles);
-  map { $_->{_localFile} = substr ($_->{depotFile}, $prefix_len) } @files;
+  my $prefix_len = (@dfiles > 1
+                    ? longest_common_prefix (@dfiles)
+                    : 1 + length((dirnames (@dfiles))[0]));
 
-  mkbasedirs (map { $_->{_localFile} } @files);
+  map { $_->{_localFile} = substr ($_->{depotFile}, $prefix_len);
+        $_->{_localFile} =~ s=^/+==;
+      } @files;
+  mkbasedirs (map { $_->{_localFile} } @files) if @files > 1;
 
   my @p;
+  my @f;
   map { my $d = join ("#", $_->{depotFile}, $_->{headRev});
         my $l = $_->{_localFile};
 
         if (-e $l)
           { print STDERR "Skipping existing file $l <= $d\n" }
         else
-          { push @p, "print -o $l $d\n" }
+          {
+            push @f, $_;
+            push @p, "print -q -o $l $d\n";
+          }
       } @files;
 
-  my @res = p4 (\@p, "run");
-  map { my $d = join ("#", $_->{depotFile}, $_->{rev});
-        my $l = substr ($_->{depotFile}, $prefix_len);
-        printf "%s <= %s - %s %s \@%s\n", $l, $d, @{$_}{qw(action type change)};
-      } @res;
+  my %xfer;
+  map { my $d = join ("#", $_->{depotFile}, $_->{headRev});
+        (my $l = substr ($_->{depotFile}, $prefix_len)) =~ s=^/+==;
 
-  fix_file_metadata (@files);
+        my ($topdir) = topdirs ($l);
+        $xfer{$topdir} += $_->{fileSize};
+        printf "%s <= %s - %s %s \@%s\n", $l, $d, @{$_}{qw(headAction headType headChange)}
+          if $opt{verbose} > 0;
+      } @f;
+
+  if ($opt{verbose} > -1)
+    {
+      my @top = sort keys %xfer;
+      my $txfer = 0;
+      my @msg = map { my $dxfer = $xfer{$_};
+                      $txfer += $dxfer;
+                      my $target = @files > 1 ? "$_/..." : $_;
+                      sprintf "Downloading %s to %s\n", fmtsize ($dxfer), $target;
+                    } @top;
+      print @msg;
+      print "This may take a while.\n" if $txfer > 2**27; # 128MB
+    }
+
+  p4 (\@p, "run");
+  fix_file_metadata (@f);
 }
 
 main (@ARGV);
