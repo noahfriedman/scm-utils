@@ -4,7 +4,7 @@
 # Created: 2014-11-13
 # Public domain.
 
-# $Id: p4-describe-changes,v 1.16 2017/09/10 21:16:38 friedman Exp $
+# $Id: p4-describe-changes,v 1.17 2017/09/10 21:44:09 friedman Exp $
 
 # Commentary:
 # Code:
@@ -40,6 +40,7 @@ my %opt = ( traditional => 0,
             show_jobs   => 1,
             show_size   => 0,
             show_type   => 0,
+            dblspace    => 0,
             reverse     => 0, );
 
 sub parse_options
@@ -64,6 +65,7 @@ sub parse_options
       "s|status=s"       => $pthrough,
       "u|user=s"         => $pthrough,
 
+      "2|double-space!"  => \$opt{dblspace},
       "d|descriptions!"  => \$opt{show_desc},
       "f|files!"         => \$opt{show_files},
       "i|integrations!"  => \$opt{show_integs},
@@ -76,6 +78,7 @@ sub parse_options
       "traditional!"     => \$opt{traditional},
 
       # The long options above are automatically negated
+      "1"                => sub { $opt{dblspace}    = 0 },
       "D"                => sub { $opt{show_desc}   = 0 },
       "F"                => sub { $opt{show_files}  = 0 },
       "I"                => sub { $opt{show_integs} = 0 },
@@ -501,9 +504,7 @@ sub describe_change
                 $val[2] = sprintf ($fmt, @{$row}[CL_FL_HOW .. CL_FL_TYPE]);
                 printf $tmpl, @val;
               }
-            # This produces too much vertical whitespace for my tastes
-            #print "\n" if $integs->{$changeno};
-
+          print "\n" if $opt{dblspace};
         }
 
       if ($opt{show_size} && $sztotal > 0 && @{$change->{row}} > 1)
@@ -638,6 +639,13 @@ Show which changes, if any, were integrated into each change and display
 which origin each submitted file was integrated, branched, copied, or
 merged from.
 
+=item B<-2>, B<--double-space>
+
+Insert a blank line between each listed file.
+In the case where integrations are displayed, the destination and origin
+are grouped together with no blank in between.
+This may enhance readability.
+
 =item B<-j>, B<--jobs>				(default)
 
 Display the job names fixed by the change.
@@ -687,6 +695,12 @@ from those changes.
 =item B<-I>, B<--no-integrations>		(default)
 
 Do not display changes or files integrated into the change.
+
+=item B<-1>, B<--no-double-space>		(default)
+
+Do not insert any blank lines between file.
+This produces a more dense display, but might be harder to read in the case
+where integration are enabled.
 
 =item B<-J>, B<--no-jobs>
 
