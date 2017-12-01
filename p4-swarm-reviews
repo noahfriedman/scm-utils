@@ -1,5 +1,5 @@
 #!/usr/bin/env perl
-# $Id: p4-swarm-reviews,v 1.13 2017/09/05 20:29:01 friedman Exp $
+# $Id: p4-swarm-reviews,v 1.14 2017/09/10 21:26:37 friedman Exp $
 
 use FindBin;
 use lib "$FindBin::Bin/../../../lib/perl";
@@ -426,7 +426,7 @@ sub p4_describe_changes
       else                     { $idmap{$review} = $review }
     }
 
-  local $_ = eval { bt (qw(p4-describe-changes -Ditz), keys %idmap) };
+  local $_ = eval { bt (qw(p4-describe-changes -2Ditz), keys %idmap) };
   return {} unless defined $_;
   my %text;
   $text{$1} = $2 while (/^\S+\s*(\d+).*?\n+(.+?)(?=(?:^\S|\Z))/gms);
