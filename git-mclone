@@ -1,13 +1,25 @@
 #!/bin/sh
-# $Id: git-multiclone,v 1.1 2017/05/19 20:59:45 friedman Exp $
+# $Id: git-mclone,v 1.2 2017/06/07 19:20:34 friedman Exp $
+
+case $1 in
+    --bare ) shift ; mode=--bare      ;;
+    *      )         mode=--recursive ;;
+esac
 
 for url in "$@"; do
     localdir=${url##*/}
     localdir=${localdir%.git}.git  # make sure it ends in .git
 
     echo "** $url"
-    git clone --recursive "$url" "$localdir" &&
-        (cd "$localdir" && git-restore-commit-mtime)
+    git clone $mode "$url" "$localdir" || continue
+
+    case $mode in
+        --bare )
+            tm=`git -C "$localdir" log -n1 --format=tformat:%ci`
+            find "$localdir" -exec touch -d "$tm" '{}' + ;;
+        * )
+            (cd "$localdir" && git-restore-commit-mtime) ;;
+    esac
     echo
 done
 
