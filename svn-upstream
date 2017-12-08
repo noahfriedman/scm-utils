@@ -1,0 +1,9 @@
+#!/bin/sh
+# $Id$
+
+# This relies on a private prop used by svn-mirror
+
+for repo in "$@"; do
+    svnlook propget --revprop -r0 "$repo" svn:sync-from-url
+    echo
+done
