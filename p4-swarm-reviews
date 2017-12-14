@@ -1,5 +1,5 @@
 #!/usr/bin/env perl
-# $Id: p4-swarm-reviews,v 1.14 2017/09/10 21:26:37 friedman Exp $
+# $Id: p4-swarm-reviews,v 1.15 2017/12/01 00:48:25 friedman Exp $
 
 use FindBin;
 use lib "$FindBin::Bin/../../../lib/perl";
@@ -37,13 +37,10 @@ sub activity
   my @all;
   while (1)
     {
-      # This query will only return 100 results max at a time.
+      # This query paginates, so loop to get all.
       my $result = $self->GET ("/api/$api_version/activity/", %args);
       push @all, @{$result->{activity}};
-
-      my $len = scalar @{$result->{activity}};
-      last unless $len >= 100;
-      $args{after} = $result->{lastSeen};
+      last unless $args{after} = $result->{lastSeen};
     }
   return \@all;
 }
