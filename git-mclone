@@ -1,5 +1,5 @@
 #!/bin/sh
-# $Id: git-mclone,v 1.4 2017/12/20 20:15:18 friedman Exp $
+# $Id: git-mclone,v 1.5 2017/12/20 20:22:13 friedman Exp $
 
 case $1 in
     --bare   ) mode=$1 ; shift  ;;
@@ -12,15 +12,14 @@ for url in "$@"; do
     localdir=${localdir%.git}.git  # make sure it ends in .git
 
     echo "** $url"
-    git clone $mode "$url" "$localdir" || continue
+    git clone $mode -- "$url" "$localdir" || continue
 
-    case $mode in
-        --bare | --mirror )
-            tm=`git -C "$localdir" log -n1 --format=tformat:%ci`
-            find "$localdir" -exec touch -d "$tm" '{}' + ;;
-        * )
-            (cd "$localdir" && git-restore-commit-mtime) ;;
-    esac
+    if [ -e "./$localdir/.git" ]; then
+        (cd "./$localdir" && git-restore-commit-mtime)
+    else # bare repo
+        tm=`git -C "$localdir" log -n1 --format=tformat:%ci`
+        find -- "$localdir" -exec touch -d "$tm" '{}' +
+    fi
     echo
 done
 
