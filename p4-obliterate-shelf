@@ -4,7 +4,7 @@
 # Created: 2017-07-13
 # Public domain
 
-# $Id$
+# $Id: p4-obliterate-shelf,v 1.1 2017/07/14 00:35:50 friedman Exp $
 
 # Commentary:
 # Code:
@@ -38,6 +38,9 @@ sub parse_options
 
       "p=s"           => \$ENV{OVERRIDE_P4PORT},
       "u=s"           => \$ENV{OVERRIDE_P4USER},
+      "c=s"           => \$ENV{OVERRIDE_P4CLIENT},
+
+      "f|force"       => \$opt{force},
       "y|yes"         => \$opt{doit},
     );
 
@@ -49,6 +52,14 @@ sub main
 {
   parse_options (\@_);
   my $err = 0;
+
+  my @shelve_args = (qw(-d -c));
+  my @change_args = (qw(-d));
+  if ($opt{force})
+    {
+      unshift @shelve_args, "-f";
+      unshift @change_args, "-f";
+    }
 
   for my $elt (p4 ([map { "describe -S -s $_" } @_], "run"))
     {
@@ -74,7 +85,7 @@ sub main
         {
           if ($opt{doit})
             {
-              my @result = p4 (qw(shelve -d -c), $chg);
+              my @result = p4 (qw(shelve), @shelve_args, $chg);
               my $resp = $result[0]->{data};
               $resp =~ s/^/$chg - / unless $resp =~ /$chg/;
               print $resp, "\n";
@@ -92,7 +103,7 @@ sub main
 
       if ($opt{doit})
         {
-          my @result = p4 (qw(change -d), $elt->{change});
+          my @result = p4 (qw(change), @change_args, $elt->{change});
           $err++ if ($result[0]->{code} eq 'error');
           print $result[0]->{data}, "\n";
         }
