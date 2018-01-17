@@ -4,7 +4,7 @@
 # Created: 2016-08-18
 # Public domain
 
-# $Id: p4-fstat,v 1.7 2017/07/07 18:52:02 friedman Exp $
+# $Id: p4-fstat,v 1.8 2017/07/20 02:14:06 friedman Exp $
 
 # Commentary:
 
@@ -36,7 +36,7 @@ my @filter;
 # headTime is the time of the changelist
 # headModTime is the modification time of the file, which might be older.
 # revtime is only set for shelved files; it's the modtime of the file in the shelf.
-my @fieldsT = (qw(depotFile clientFile path haveRev shelved
+my @fieldsT = (qw(depotFile clientFile path haveRev shelved fileSize
                   headAction headChange headRev headType headModTime headTime
                       action     change workRev     type     revtime));
 
@@ -71,26 +71,27 @@ sub parse_options
       # Note that we use -e, not -c, for speed and least surprise since -c
       # also matches any *later* change, a behavior which is not consistent
       # with most other commands. If you really want fstat -c, use after --.
-      'c|change=i'    => sub { push @flags, "-e", $_[1] },
-      'm|max=i'       => sub { push @flags, "-m", $_[1] },
-      'F|filter=s@'   => \@filter,
+      'c|change=i'       => sub { push @flags, "-e", $_[1] },
+      'm|max=i'          => sub { push @flags, "-m", $_[1] },
+      'F|filter=s@'      => \@filter,
 
-      'O=s@'          => $pthrough,
-      'R=s@'          => $pthrough,
-      'S=s@'          => $pthrough,
+      'O=s@'             => $pthrough,
+      'R=s@'             => $pthrough,
+      'S=s@'             => $pthrough,
 
-      "H|have"        => \$opt{have},
-      "o|opened"      => \$opt{opened},
-      "e|exists"      => sub { push @filter,
-                                 (qw(^headAction=delete
-                                     ^headAction=move/delete
-                                     ^headAction=purge
-                                     ^headAction=archive
-                                   ));
-                             },
+      "H|have"           => \$opt{have},
+      "o|opened"         => \$opt{opened},
+      "e|exists"         => sub { push @filter,
+                                    (qw(^headAction=delete
+                                        ^headAction=move/delete
+                                        ^headAction=purge
+                                        ^headAction=archive
+                                      ));
+                                },
+      "z|size|filesize+" => \$opt{filesize},
 
-      "p=s"           => \$ENV{OVERRIDE_P4PORT},
-      "u=s"           => \$ENV{OVERRIDE_P4USER},
+      "p=s"              => \$ENV{OVERRIDE_P4PORT},
+      "u=s"              => \$ENV{OVERRIDE_P4USER},
     );
 
   pod2usage (-exitstatus => 1, -verbose => 0)     unless $succ;
@@ -106,9 +107,17 @@ sub parse_options
     }
   elsif ($opt{have}) { push @flags, "-Rh"; }
 
+  if ($opt{filesize})
+    {
+      push @flags, "-Ol";
+      push @fieldsP, 'fileSize';
+      push @fieldsO, 'fileSize';
+      $fieldRJ[4] = 1;
+    }
+
   if ($opt{verbose})
     {
-      $strftime_fmt = "%Y-%m-%d %H:%M:%S" if $opt{verbose} > 1;
+      $strftime_fmt = "%Y-%m-%d  %H:%M:%S %z" if $opt{verbose} > 1;
       my $mtime = $opt{verbose} > 2 ? 'headModTime' : 'headTime';
 
       push @fieldsP, 'headType', $mtime;
@@ -158,6 +167,25 @@ sub prune_local
   return;
 }
 
+sub fmtsize
+{
+  return '' unless defined $_[0] && $_[0] ne '0';
+
+  my $size   = shift;
+  my $fmtsize = 1024;
+  my @suffix = ('', qw(K M G T P E));
+  my $idx = 0;
+
+  while ($size > $fmtsize)
+    {
+      $size /= $fmtsize;
+      $idx++;
+    }
+
+  my $fmtstr = $size < 100 && $idx != 0 ? "%.1f%s" : "%d%s" ;
+  return sprintf ($fmtstr, $size, $suffix[$idx]);
+}
+
 sub main
 {
   parse_options (\@_);
@@ -180,26 +208,30 @@ sub main
       # Skip entries that only contain 'desc' when using '-e changelist'
       next unless exists $r->{depotFile};
 
+      if (exists $r->{action})
+           { substr ($r->{change},     0, 0, '*') }
+      else { substr ($r->{headChange}, 0, 0, ' ') }
+
+      map { substr ($r->{$_}, 0, 0, '#') if exists $r->{$_};
+          } (qw(headRev workRev));
+
+      if ($opt{filesize} && exists $r->{fileSize})
+        { $r->{fileSize} = fmtsize ($r->{fileSize}) if $opt{filesize} < 2 }
+      else
+        { $r->{fileSize} = "" }  # common for deleted files
+
+      map { $r->{$_} = strftime ($strftime_fmt, localtime ($r->{$_}))
+              if exists $r->{$_};
+          } (qw(headModTime headTime revtime));
+
       # We might not have clientFile if we have no current client or path
       # is not mapped.
       my @row = exists $r->{$xFile} ? $r->{$xFile} : $r->{depotFile};
-      if (exists $r->{action})
-        {
-          push @row, @{$r}{@fieldsO};
-          substr ($row[1], 0, 0, '*'); # prepend
-        }
-      else
-        {
-          push @row, @{$r}{@fieldsP};
-          substr ($row[1], 0, 0, ' ');
-        }
+      prune_local ($row[0]) if $opt{localpath};
 
-      substr ($row[3], 0, 0, '#');
-      $row[5] = (defined $row[5] && $row[5] > 0
-                 ? strftime ($strftime_fmt, localtime ($row[5]))
-                 : "")
-        if @row > 5;
-      prune_local ($row[0]) if $opt{localpath} > 1;
+      push @row, (exists $r->{action}
+                  ? @{$r}{@fieldsO}
+                  : @{$r}{@fieldsP});
 
       for (my $i = 0; $i < @row; $i++)
         {
