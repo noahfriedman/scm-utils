@@ -4,7 +4,7 @@
 # Created: 2017-07-13
 # Public domain
 
-# $Id: p4-obliterate-shelf,v 1.1 2017/07/14 00:35:50 friedman Exp $
+# $Id: p4-obliterate-shelf,v 1.2 2018/01/17 22:15:52 friedman Exp $
 
 # Commentary:
 # Code:
@@ -113,7 +113,7 @@ sub main
         }
     }
 
-  print "Use -y to actually perform this operation.\n" if $err == 0;
+  print "Use -y to actually perform this operation.\n" unless $opt{doit};
 }
 
 main (@ARGV);
