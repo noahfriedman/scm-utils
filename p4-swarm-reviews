@@ -1,5 +1,5 @@
 #!/usr/bin/env perl
-# $Id: p4-swarm-reviews,v 1.15 2017/12/01 00:48:25 friedman Exp $
+# $Id: p4-swarm-reviews,v 1.16 2017/12/14 22:36:00 friedman Exp $
 
 use FindBin;
 use lib "$FindBin::Bin/../../../lib/perl";
@@ -239,6 +239,9 @@ sub parse_activity
                  approved  => sub
                  { push @{$review->{approved_by}}, $activity->{user} },
 
+                 archived  => sub
+                 { push @{$review->{archived_by}}, $activity->{user} },
+
                  requested => sub
                  { $review->{review_for} = $activity->{user} },
 
@@ -310,6 +313,12 @@ sub print_review
       printr ("State", $data->{state},
               sprintf ("(%s)", join (", ", @{$data->{approved_by}})),
               ($data->{pending} ? "*pending*" : ()));
+    }
+  elsif ($data->{archived_by})
+    {
+      # We don't care about pending state if archived.
+      printr ("State", $data->{state},
+              sprintf ("(%s)", join (", ", @{$data->{archived_by}})));
     }
   else
     {
