@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# $Id: git-update,v 1.6 2017/05/12 22:10:33 friedman Exp $
+# $Id: git-update,v 1.7 2017/05/26 19:52:32 friedman Exp $
 
 git_revno()
 {
@@ -18,6 +18,27 @@ has_remotes()
 {
     # exit code 1 if no matches
     git config --local --get-regexp '^remote\..*\.url$' > /dev/null
+}
+
+# Fast forward, without checkout, any non up-to-date local branches that
+# have no local commits which would need merging with the upstream.
+fastforward_refs()
+{
+    ref_cur=`git symbolic-ref HEAD`
+
+    git for-each-ref --format='%(refname) %(upstream)' refs/heads |
+        while read ref_loc ref_rem; do
+            # check if no upstream or ref is current checkout
+            case $ref_rem:$ref_loc in :* | *:$ref_cur ) continue ;; esac
+
+            rev_loc=`git rev-parse $ref_loc`
+            rev_rem=`git rev-parse $ref_rem`
+            case $rev_loc in $rev_rem ) continue ;; esac
+
+            case `git merge-base $ref_loc $ref_rem` in
+                $rev_loc ) git update-ref $ref_loc $ref_rem ;;
+            esac
+        done
 }
 
 apush() { eval "$1=(\"\${$1[@]}\" \"\${@:2}\")"; }
@@ -58,8 +79,9 @@ main()
                 revno_old=`git_revno`
                 git pull "${gitargs[@]}" --all --no-stat --recurse-submodules
                 revno_new=`git_revno`
-
                 git-restore-commit-mtime $revno_old..$revno_new
+
+                fastforward_refs
             fi
         )
 
