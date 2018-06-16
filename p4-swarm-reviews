@@ -1,88 +1,30 @@
 #!/usr/bin/env perl
-# $Id: p4-swarm-reviews,v 1.16 2017/12/14 22:36:00 friedman Exp $
+# $Id: p4-swarm-reviews,v 1.17 2018/01/22 19:27:18 friedman Exp $
+
+use strict;
+use warnings qw(all);
 
 use FindBin;
 use lib "$FindBin::Bin/../../../lib/perl";
 use lib "$ENV{HOME}/lib/perl";
 
-
-package REST::Swarm;
-
-use strict;
-use warnings qw(all);
-
-use base qw(NF::REST);
-
-our $api_version = 'v2'; # 'v1.2'
-
-sub new
-{
-  my $type = shift;
-  my $class = ref ($type) || $type;
-  $class->SUPER::new (array_as_vector => { __ALL => 1 }, @_);
-}
-
-sub search
-{
-  my ($self, %args) = @_;
-
-  my $result = $self->GET ("/api/$api_version/reviews/", %args);
-  return $result->{reviews};
-}
-
-sub activity
-{
-  my ($self, %args) = @_;
-
-  my @all;
-  while (1)
-    {
-      # This query paginates, so loop to get all.
-      my $result = $self->GET ("/api/$api_version/activity/", %args);
-      push @all, @{$result->{activity}};
-      last unless $args{after} = $result->{lastSeen};
-    }
-  return \@all;
-}
-
-
-package REST::Jira;
-
-use strict;
-use warnings qw(all);
-
-# The reference implementation does everything we need.
-use base qw(NF::REST::Jira);
-
-
-#package P4::Swarm;
-
-#use strict;
-#use warnings qw(all);
-
-#use NF::P4cmd;
-
-# Swarm stores data for a review N as a perforce user counter of the
-# form 'swarm-review-X' where X is the following transform of N.  This
-# value can be retrieved via "p4 counter -u KEY" or "p4 key KEY".
-#sub review_counter_name
-#{
-#  my $change = shift;
-#  sprintf ("swarm-review-%08x", 0xffffffff - $change);
-#}
-
-
-package main;
-
-use strict;
-use warnings qw(all);
-
+use Getopt::Long;
+use Pod::Usage;
 use POSIX qw(strftime);
 
-my $swarm_host = 'http://swarm.perforce.com';
-my $jira_host  = 'http://jira.perforce.com:8080';
-my $jira_user  = 'build';
-my $jira_pass  = 'rein4ce!';
+use NF::P4Swarm;
+use NF::Jira;
+
+our %opt = ( show_files => 0,
+
+             swarm_host => 'http://swarm.perforce.com',
+             swarm_user => undef,
+             swarm_pass => undef,
+
+             jira_host  => 'http://jira.perforce.com:8080',
+             jira_user  => $ENV{JIRA_USER} || 'build',
+             jira_pass  => $ENV{JIRA_PASS} || 'rein4ce!',
+           );
 
 my $line_maxlen = (($ENV{TERM} eq 'emacs'
                     || (($ENV{INSIDE_EMACS} || $ENV{EMACS})
@@ -110,7 +52,10 @@ my %jira_issue_fields = ( 'Build Changelist(s)'    => 'bld_changes',
   sub swarm
     {
       return $swarm if $swarm;
-      $swarm = REST::Swarm->new ( host => $swarm_host );
+      $swarm = NF::P4Swarm->new ( host => $opt{swarm_host},
+                                  user => $opt{swarm_user},
+                                  pass => $opt{swarm_pass},
+                                  api_version => 'v2' );
     }
 }
 
@@ -119,9 +64,9 @@ my %jira_issue_fields = ( 'Build Changelist(s)'    => 'bld_changes',
   sub jira
     {
       return $jira if $jira;
-      $jira = REST::Jira->new (host => $jira_host,
-                               user => $jira_user,
-                               pass => $jira_pass, );
+      $jira = NF::Jira->new (host => $opt{jira_host},
+                             user => $opt{jira_user},
+                             pass => $opt{jira_pass}, );
     }
 }
 
@@ -295,7 +240,7 @@ sub print_review
 {
   my ($id, $data, $desc) = @_;
 
-  printf "%s/reviews/%s\n", $swarm_host, $id;
+  printf "%s/reviews/%s\n", $opt{swarm_host}, $id;
 
   printr ("Summary", $data->{summary}) if $data->{summary};
 
@@ -347,7 +292,7 @@ sub print_review
 sub swarm_search
 {
   my ($swarm, $need, $found, $fields) = (shift, shift, shift, shift);
-  my $reviews = $swarm->search (fields => $fields, @_);
+  my $reviews = $swarm->reviews (fields => $fields, @_);
   if ($reviews && @$reviews)
     {
       prune_needed ($need, $reviews);
@@ -409,7 +354,6 @@ sub bt # Like `foo` in bourne shell.
     };
   print(STDERR $@), return if $@;
 
-
   local $/ = undef;
   chomp (local $_ = <$fh>);
   return $_;
@@ -441,17 +385,65 @@ sub p4_describe_changes
   return \%desc;
 }
 
+sub parse_options
+{
+  my $help = -1;
+  local *ARGV = \@{$_[0]}; # modify our local arglist, not real ARGV.
+
+  my $action_fn = sub { $opt{action} = $_[0] };
+
+  my $parser = Getopt::Long::Parser->new;
+  $parser->configure (qw(bundling autoabbrev no_ignore_case));
+  my $succ = $parser->getoptions
+    ( "D|debug+"        => \$ENV{NF_REST_DEBUG},
+      "h|?|help+"       => \$help,
+
+      "f|files"         => \$opt{show_files},
+      "w|wait-commit"   => \$opt{wait_commit},
+
+      # Even though these all call the same fn, they must be separate
+      # because $_[0] is always the first option in any "a|b" string.
+      "approve"         => $action_fn,
+      "commit"          => $action_fn,
+      "reject"          => $action_fn,
+      "archive"         => $action_fn,
+      "needs_review|needs-review" => $action_fn,
+      "needs_revision|needs-revision" => $action_fn,
+
+      "jh|jira-host=s"  => \$opt{jira_host},
+      "ju|jira-user=s"  => \$opt{jira_user},
+      "jp|jira-pass=s"  => \$opt{jira_pass},
+
+      "sh|swarm-host=s" => \$opt{swarm_host},
+      "su|swarm-user=s" => \$opt{swarm_user},
+      "sp|swarm-pass=s" => \$opt{swarm_pass},
+    );
+
+  pod2usage (-exitstatus => 1, -verbose => 0)     unless $succ;
+  pod2usage (-exitstatus => 0, -verbose => $help) if $help >= 0;
+
+  $opt{swarm_user} = $ENV{SUDO_USER} || $ENV{USER} || $ENV{LOGNAME}
+    if ($opt{action} && ! $opt{swarm_user});
+
+  if ($opt{swarm_user} && ! $opt{swarm_pass})
+    {
+      # "p4 tickets" ignores -G or other marshalled/tagged output modes,
+      # so NF::P4Cmd won't work.  Just parse the text output.
+      my $tickets = bt (qw(p4 tickets));
+      $opt{swarm_pass} = $1
+        # This is probably very perforce.com specific.
+        if $tickets =~ /:P4Cluster\s+\($opt{swarm_user}\)\s+(.*)$/m;
+    }
+}
 
 sub main
 {
-  local $ENV{NF_REST_DEBUG} = $ENV{SWARM_REVIEWS_DEBUG};
+  parse_options (\@_);
 
   # This only matters when output is not to a tty, but it keeps any errors
   # synchronized with regular output.
   STDOUT->autoflush(1);
   STDERR->autoflush(1);
-
-  my $show_files_p = (@_ && $_[0] eq "-f" ? shift : 0);
 
   my @list;
   for my $arg (@_)
@@ -478,10 +470,24 @@ sub main
       exit 1;
     }
 
+  my $swarm = swarm();
+  if ($opt{action})
+    {
+      my %w = ( wait => 'true' ) if $opt{action} eq 'commit' && $opt{wait_commit};
+      my $fn = $opt{action};
+      map { my $result = eval { $swarm->$fn ($_, %w) };
+            if ($@)
+              { print STDERR $@, "\n" if $@ }
+            else
+              {
+                printf "%s: %s\n", $_, $result->{review}->{stateLabel};
+              }
+          } @list;
+      print "\n" if @list;
+    }
+
   my %need = (map { $_ => undef } @list);
   my %found;
-
-  my $swarm = swarm();
   swarm_search ($swarm, \%need, \%found, \@review_fields, ids => \@list);
   swarm_search ($swarm, \%need, \%found, \@review_fields, change => [keys %need])
     if %need;
@@ -497,7 +503,7 @@ sub main
   map { print STDERR "$_: no Swarm reference found.\n" } sort keys %need;
   print STDERR "\n" if %need;
 
-  my $desc = p4_describe_changes (\%found) if $show_files_p;
+  my $desc = p4_describe_changes (\%found) if $opt{show_files};
   map { print_review ($_, $found{$_}, $desc->{$_}) } sort keys %found;
 }
 
