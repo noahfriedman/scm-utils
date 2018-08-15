@@ -1,5 +1,5 @@
 #!/usr/bin/env perl
-# $Id: p4-swarm-reviews,v 1.17 2018/01/22 19:27:18 friedman Exp $
+# $Id: p4-swarm-reviews,v 1.18 2018/06/16 01:00:34 friedman Exp $
 
 use strict;
 use warnings qw(all);
@@ -48,6 +48,10 @@ my %jira_issue_fields = ( 'Build Changelist(s)'    => 'bld_changes',
                         );
 
 { # create closure to hide $swarm from everything below
+
+  # n.b. if you bump the api_version above v3, parse_activity will need
+  # handling of streams field since it changes from an array into a
+  # dictionary.  There might be other API differences as well.
   my $swarm;
   sub swarm
     {
@@ -154,6 +158,8 @@ sub parse_review
             }
 
           $f->{summary} = $1 if ($desc =~ m=^(.+)$=m);
+          $f->{summary} .= "..."
+            if (length ($desc) - length ($1)) > 2;
         }
     }
 }
@@ -492,13 +498,12 @@ sub main
   swarm_search ($swarm, \%need, \%found, \@review_fields, change => [keys %need])
     if %need;
 
-  my @stream = map { "review-$_" } sort keys %found;
-  if (@stream)
-    {
-      my $activity = $swarm->activity (fields => \@activity_fields,
-                                       stream => \@stream);
-      parse_activity (\%found, $activity);
-    }
+  # activity endpoint can only search one stream at a time
+  map { my $stream = $_;
+        my $activity = $swarm->activity (fields => \@activity_fields,
+                                         stream => $stream);
+        parse_activity (\%found, $activity);
+      } map { "review-$_" } sort keys %found;
 
   map { print STDERR "$_: no Swarm reference found.\n" } sort keys %need;
   print STDERR "\n" if %need;
