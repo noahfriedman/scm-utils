@@ -1,5 +1,5 @@
 #!/usr/bin/env perl
-# $Id: p4-swarm-reviews,v 1.18 2018/06/16 01:00:34 friedman Exp $
+# $Id: p4-swarm-reviews,v 1.19 2018/08/15 00:00:15 friedman Exp $
 
 use strict;
 use warnings qw(all);
@@ -37,7 +37,7 @@ my $line_maxlen = (($ENV{TERM} eq 'emacs'
 my @review_fields   = (qw(id author description
                           changes commits commitStatus
                           created updated
-                          state pending));
+                          state));
 
 my @activity_fields = (qw(id action user change streams));
 
@@ -190,6 +190,9 @@ sub parse_activity
                  approved  => sub
                  { push @{$review->{approved_by}}, $activity->{user} },
 
+                 rejected  => sub
+                 { push @{$review->{rejected_by}}, $activity->{user} },
+
                  archived  => sub
                  { push @{$review->{archived_by}}, $activity->{user} },
 
@@ -259,26 +262,25 @@ sub print_review
   printr ("Requested by", $data->{review_for})
     if $data->{review_for} && $data->{review_for} ne $data->{author};
 
-  if ($data->{approved_by})
+  my $culprit;
+  for my $who_by (qw(approved_by rejected_by archived_by))
     {
-      printr ("State", $data->{state},
-              sprintf ("(%s)", join (", ", @{$data->{approved_by}})),
-              ($data->{pending} ? "*pending*" : ()));
+      next unless $data->{$who_by};
+      $culprit = $data->{$who_by};
+      last;
     }
-  elsif ($data->{archived_by})
+  if ($culprit)
     {
-      # We don't care about pending state if archived.
       printr ("State", $data->{state},
-              sprintf ("(%s)", join (", ", @{$data->{archived_by}})));
+              sprintf ("(%s)", join (", ", @$culprit)));
     }
   else
     {
-      printr ("State", join (", ", $data->{state},
-                             ($data->{pending} ? "pending" : ())));
+      printr ("State", $data->{state});
     }
 
-  printr ("User shelf",    $data->{orig}, "($data->{author})") if $data->{orig};
-  if    ($data->{commit_by}) { printr ("Commits", $data->{commit_by}) }
+  printr ("User shelf", $data->{orig}, "($data->{author})") if $data->{orig};
+  if    ($data->{commit_by}) { printr ("Commits",   $data->{commit_by}) }
   elsif ($data->{commits})   { printr ("Commits", @{$data->{commits}}) }
 
   printr ("Commit Error", $data->{commitStatus}->{error})
