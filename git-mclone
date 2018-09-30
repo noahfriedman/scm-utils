@@ -1,5 +1,5 @@
 #!/bin/sh
-# $Id: git-mclone,v 1.5 2017/12/20 20:22:13 friedman Exp $
+# $Id: git-mclone,v 1.6 2017/12/20 22:40:39 friedman Exp $
 
 case $1 in
     --bare   ) mode=$1 ; shift  ;;
@@ -17,6 +17,10 @@ for url in "$@"; do
     if [ -e "./$localdir/.git" ]; then
         (cd "./$localdir" && git-restore-commit-mtime)
     else # bare repo
+        if type git-lfs > /dev/null 2>&1; then
+            git -C "$localdir" lfs fetch --all
+        fi
+
         tm=`git -C "$localdir" log -n1 --format=tformat:%ci`
         find -- "$localdir" -exec touch -d "$tm" '{}' +
     fi

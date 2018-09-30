@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# $Id: git-update,v 1.7 2017/05/26 19:52:32 friedman Exp $
+# $Id: git-update,v 1.8 2018/03/08 02:56:42 friedman Exp $
 
 git_revno()
 {
@@ -75,6 +75,7 @@ main()
 
             if bare_repo_p; then
                 git fetch --all
+                test -d lfs/objects && git lfs fetch --all
             else
                 revno_old=`git_revno`
                 git pull "${gitargs[@]}" --all --no-stat --recurse-submodules
