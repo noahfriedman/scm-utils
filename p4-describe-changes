@@ -4,7 +4,7 @@
 # Created: 2014-11-13
 # Public domain.
 
-# $Id: p4-describe-changes,v 1.17 2017/09/10 21:44:09 friedman Exp $
+# $Id: p4-describe-changes,v 1.18 2017/12/01 00:47:38 friedman Exp $
 
 # Commentary:
 # Code:
@@ -20,7 +20,8 @@ use Getopt::Long;
 use Pod::Usage;
 use POSIX qw(strftime);
 
-use NF::P4cmd qw(:direct);
+use NF::PrintObject qw(:debug);
+use NF::P4cmd       qw(:direct);
 
 use constant { CL_depotFile  => 0,    FL_CHG   => 0,
                CL_rev        => 1,    FL_FILE  => 1,
@@ -251,6 +252,7 @@ sub integ_map
   my %integ;
   my %shelve;
 
+  __PP_DEBUG { \@_ } @_;
   for my $elt (@_)
     {
       next if p4error ($elt);
@@ -261,12 +263,15 @@ sub integ_map
       if (exists $elt->{shelved} && $elt->{status} eq 'pending')
         {
           my $fstat = $shelve{$change} = get_shelved_fstat ($change);
+          __PP_DEBUG { 'shelved_fstat', $fstat };
 
           for my $row (@$rowlist)
             {
+              __PP_DEBUG { 'row', $row };
               next unless $row->[CL_rev] eq 'none';
 
               my $depotFile = $row->[CL_depotFile];
+              __PP_DEBUG { 'depotFile', $depotFile };
               my $file = $fstat->{$depotFile} or next;
               $row->[CL_rev] = $file->[FL_REV];
             }
@@ -287,6 +292,7 @@ sub integ_map
           }
       } values %integ;
   # Copy in any fromfile information from shelves into the filelog.
+  __PP_DEBUG { '%shelve', \%shelve };
   while (my ($change, $depotFile_tbl) = each %shelve)
     {
       while (my ($depotFile, $elt) = each %$depotFile_tbl)
@@ -296,6 +302,7 @@ sub integ_map
         }
     }
   my $filelog = get_filelog (\@flist);
+  __PP_DEBUG { 'filelog', $filelog };
 
   # Now get the change number of the source files.
   undef @flist;
@@ -310,6 +317,7 @@ sub integ_map
   if (@flist)
     {
       my $histmap = get_filelog (\@flist);
+      __PP_DEBUG { 'histmap', $histmap };
       while (my ($depotFile, $elt) = each %$filelog)
         {
           while (my ($rev, $vals) = each %$elt)
