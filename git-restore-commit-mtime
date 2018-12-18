@@ -48,9 +48,14 @@ sub git_live_files
 
 sub git_log_data
 {
-  # Adding a path so that we only get commits with files slows this down
-  # considerably.  We'll just skip the file-less commits below.
-  my $data = cmd_out (qw(git log -z --format=format:%ct --name-only --relative @ --), @_);
+  @_ = '@' unless @_;
+  splice( @_, 1, 0, '--' ) if ( @_ > 1
+                                && $_[0] =~ m=\@|.+?\.\..+=
+                                && $_[1] ne '--' );
+
+  # n.b. adding paths to get commits with files slows this down considerably.
+  # We skip the file-less commits below anyway.
+  my $data = cmd_out (qw(git log -z --format=format:%ct --name-only --relative), @_);
   my %tbl;
 
   # Generate a map of what files are "live", so that we can ignore file
