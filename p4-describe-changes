@@ -4,7 +4,7 @@
 # Created: 2014-11-13
 # Public domain.
 
-# $Id: p4-describe-changes,v 1.18 2017/12/01 00:47:38 friedman Exp $
+# $Id: p4-describe-changes,v 1.19 2018/10/12 01:40:23 friedman Exp $
 
 # Commentary:
 # Code:
@@ -138,7 +138,7 @@ sub get_describe
   for my $elt (p4 (\@_, qw(describe -s)))
     {
       next if p4error ($elt);
-      if (exists $elt->{shelved} && !exists $elt->{rev})
+      if (exists $elt->{shelved})
         { push @shelved, $elt->{change} }
       else
         { push @desc, $elt }
