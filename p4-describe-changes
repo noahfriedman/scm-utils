@@ -4,7 +4,7 @@
 # Created: 2014-11-13
 # Public domain.
 
-# $Id: p4-describe-changes,v 1.19 2018/10/12 01:40:23 friedman Exp $
+# $Id: p4-describe-changes,v 1.20 2019/02/04 22:43:55 friedman Exp $
 
 # Commentary:
 # Code:
@@ -268,10 +268,7 @@ sub integ_map
           for my $row (@$rowlist)
             {
               __PP_DEBUG { 'row', $row };
-              next unless $row->[CL_rev] eq 'none';
-
               my $depotFile = $row->[CL_depotFile];
-              __PP_DEBUG { 'depotFile', $depotFile };
               my $file = $fstat->{$depotFile} or next;
               $row->[CL_rev] = $file->[FL_REV];
             }
