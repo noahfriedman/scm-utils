@@ -4,7 +4,7 @@
 # Created: 2014-11-13
 # Public domain.
 
-# $Id: p4-describe-changes,v 1.20 2019/02/04 22:43:55 friedman Exp $
+# $Id: p4-describe-changes,v 1.21 2019/02/07 20:14:07 friedman Exp $
 
 # Commentary:
 # Code:
@@ -470,12 +470,12 @@ sub describe_change
       $tmpl .= "  %5s"          if $opt{show_size};
       $tmpl .= "  %s\n";
 
-      my $m2fmt = '%-11s';
-      $m2fmt .= '  ' . (' ' x 11) if $opt{show_type};
-      $m2fmt .= '  ' . (' ' x  5) if $opt{show_size};
-      $m2fmt .= '  %3$s';
+      my $m2fmt = '';
+      $m2fmt .= (' ' x 13) if $opt{show_type};
+      $m2fmt .= (' ' x  7) if $opt{show_size};
+      $m2fmt .= '%2$s';
 
-      my $ifmt  = $m2fmt . '%4$s (@%2$s)';
+      my $ifmt  = $m2fmt . '%3$s (@%1$s)';
 
       my $sztotal = 0;
       my @val;
@@ -505,8 +505,16 @@ sub describe_change
             if ($opt{show_integs} && $integ_how)
               {
                 map { $_ = "" } @val;  # set all to empty string
-                my $fmt = ($integ_how eq 'moved to' ? $m2fmt : $ifmt);
-                $val[2] = sprintf ($fmt, @{$row}[CL_FL_HOW .. CL_FL_TYPE]);
+                $val[ CL_action ] = $integ_how;
+
+                my $from = $row->[CL_FL_FILE];
+                $from .= sprintf ('%s (@%s)', @{$row}[CL_FL_RANGE, CL_FL_CHG])
+                  if $integ_how ne 'moved to';
+
+                my $fidx = 3;
+                $fidx++ if $opt{show_type};
+                $fidx++ if $opt{show_size};
+                $val[$fidx] = $from;
                 printf $tmpl, @val;
               }
           print "\n" if $opt{dblspace};
