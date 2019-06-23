@@ -1,0 +1,299 @@
+#!/usr/bin/env perl
+# git-changelog --- generate GNU ChangeLog-style log
+# Author: Noah Friedman <friedman@splode.com>
+# Created: 2019-06-22
+# Public domain
+
+# $Id$
+
+# Commentary:
+
+# Usage: cd to-top-of-repo; git-changelog
+# optional arg: revision range, e.g. "@{yesterday}..@"
+# Other standard log args (e.g. -n) also applicable
+
+# Code:
+
+package ChangeLog;
+
+use strict;
+use warnings qw(all);
+
+my %change_label =
+  ( A => 'add',
+    C => 'copy',
+    D => 'del',
+    M => 'edit',
+    R => 'rename',
+    T => 'type',
+    U => 'unmerge',
+    X => 'unknown',
+    B => 'broken',
+  );
+
+my $log_format = join ("%x00", qw( chash:%h  thash:%t
+                                 aname:%aN amail:%aE adate:%aI
+                                 cname:%cN cmail:%cE cdate:%cI
+                                 desc:%B note:%N refs:%D filelog:));
+
+my $git_cmd = $ENV{GIT} || "git";
+my @log_cmd = ( "log",
+                "--pretty=format:$log_format%x00",
+                "--name-status",
+                "--no-merges",
+                "-z", );
+
+my $template = q{%(adate)  %(aname)  <%(amail)>  %(chash):%(thash)
+
+%(committedby)%n%n%(desc)%n%(note)%n%(filelog)%n%n};
+
+sub __cmd_out
+{
+  my $pid = open (my $fh, "-|");
+  die "fork: $!\n" unless defined $pid;
+  local $/ = wantarray ? $/ : undef;
+  return <$fh> if $pid; # parent
+  exec ({ $_[0] } @_) or die "exec: $_[0]: $!\n";
+}
+
+sub __fold_text
+{
+  local $_ = shift;
+  return unless defined $_;
+
+  s/\r//g;
+  s/\t/        /g;
+  my @para = split (/\n\n+/, $_);
+
+  foreach $_ (@para)
+    {
+      if (/^\s/)
+        {
+          s/^\s{1,8}/\t/gm;
+          next;
+        }
+      next if /^\s*[*#\$]/;
+
+      s/\s*\n\s*/ /g;
+      s/(.{1,70})(?:\s+|$)/$1\n/g;
+      s/\n$//s;
+    }
+  return join ("\n\n", @para);
+}
+
+sub __maxlen
+{
+  my @len = map { length $_ } @_;
+  my $max = shift @len;
+  while (@len)
+    {
+      $max = $len[0] if $len[0] > $max;
+      shift @len;
+    }
+  return $max;
+}
+
+sub new
+{
+  my $type = shift;
+  my $class = ref ($type) || $type;
+
+  my $self = {};
+  bless $self, $class;
+
+  $self->get_log_data (@_);
+  return $self;
+}
+
+sub get_log_data
+{
+  my $self = shift;
+
+  @_ = '@' unless @_;
+  splice( @_, 1, 0, '--' ) if ( @_ > 1
+                                && $_[0] =~ m=\@|.+?\.\..+=
+                                && $_[1] ne '--' );
+  $self->{data} = __cmd_out ($git_cmd, @log_cmd, @_) . "\0";
+}
+
+sub next_log_entry
+{
+  my $self = shift;
+
+  return unless $self->{data} =~ /\G(.*?)\0\0/gs;
+
+  my %entry;
+  my @field = split( /\0/, $1 );
+  while (@field)
+    {
+      my ($key, $val) = split (/:/, shift @field, 2);
+      if ($key eq 'filelog')
+        {
+          my %filelog;
+          $field[0] =~ s/\n//g if @field;
+          while (@field)
+            {
+              my $action = shift @field;
+              my $file   = shift @field;
+
+              if (substr ($action, 0, 1) eq 'R')
+                {
+                  my $newname = shift @field;
+                  my $pct = int (substr ($action, 1));
+                  push @{$filelog{R}}, [$file, $newname, $pct];
+                }
+              else
+                {
+                  push @{$filelog{$action}}, $file;
+                }
+            }
+          $entry{$key} = \%filelog;
+        }
+      elsif ($val ne '')
+        {
+          $entry{$key} = $val;
+        }
+    }
+
+  return \%entry;
+}
+
+sub log_entries
+{
+  my $self = shift;
+  my @log;
+  while (my $entry = $self->next_log_entry())
+    {
+      push @log, $entry;
+    }
+  return \@log;
+}
+
+sub _format_filelog
+{
+  my $self  = shift;
+  my $entry = shift;
+
+  my %flog = %{$entry->{filelog}}; # destructively modified
+  my @fmtflog;
+  my $fn = sub
+    {
+      my $action = shift;
+      my $files = (delete $flog{$action});
+      return unless $files;
+      my $label = $change_label{$action};
+
+      if ($action eq 'R')
+        {
+          my @renames;
+          my $w0 = __maxlen (map { $_->[0] } @$files);
+          my $w1 = __maxlen (map { $_->[1] } @$files);
+          for my $elt (@$files)
+            {
+              my ($from, $to, $pct) = @$elt;
+              my $line = sprintf ("%-${w0}s => %-${w1}s", $from, $to);
+              $line .= " ($pct% similar)" if ($pct < 100 && $pct > 0);
+              push @renames, $line;
+            }
+          unshift @renames, '' if @renames > 1;
+          $files = \@renames;
+        }
+
+      my $str = sprintf ("# %-5s %s", "$label:", join ( "\n\t", @$files));
+      $str =~ s/^/\t/gm;
+      $str =~ s/\s+$//gm;
+      return $str;
+    };
+
+  for my $action (qw(A C D R M))
+    {
+      my $str = &$fn ($action);
+      push @fmtflog, $str if defined $str;
+    }
+  for my $action (keys %flog)
+    {
+      my $str = &$fn ($action);
+      push @fmtflog, $str if defined $str;
+    }
+  if (@fmtflog)
+    {
+      $entry->{filelog} = join ("\n\n", @fmtflog);
+    }
+  else
+    {
+      delete $entry->{filelog};
+    }
+}
+
+sub format_log_entry
+{
+  my $self = shift;
+  my $ent  = shift || $self->next_log_entry();
+  return unless $ent;
+
+  my %entry = %$ent;  # destructively modified
+  map { if (defined $_)
+          {
+            $_ =~ s/T/ /;
+            $_ =~ s/(.\d\d):(\d\d)$/ $1$2/;
+          }
+      } @entry{qw(adate cdate)};
+
+  $entry{amail} = '' unless defined $entry{amail};
+
+  # Reformatting is generally too extreme.
+  #$entry{desc} = __fold_text ($entry{desc});
+  $entry{desc} =~ s/^[ ]{1,8}/\t/gm;
+  $entry{desc} =~ s/^/\t/gm;
+  $entry{desc} =~ s/^\s+$//gm;
+
+  if (   $entry{cname} ne $entry{aname}
+      || $entry{cmail} ne $entry{amail})
+    {
+      $entry{committedby} =
+        sprintf( "\tCommitted-by: %s <%s> %s",
+                 @entry{qw(cname cmail cdate)})
+    }
+
+  $self->_format_filelog (\%entry);
+
+  local $_ = $template;
+  my $lastsub = 0;
+  while (/(%\(.*?\)|%n)/g)
+    {
+      my $text = $1;
+      if ($text eq '%n')
+        {
+          if ($lastsub) { s//\n/ } else { s/// }
+        }
+      else
+        {
+          my $elt = $1 if $text =~ /%\((.*?)\)/;
+          my $val = $entry{$elt} if defined $elt;
+          if (!defined $val || $val eq '')
+            { s///;     $lastsub = 0 }
+          else
+            { s//$val/; $lastsub = 1 }
+        }
+    }
+  return $_;
+}
+
+
+package main;
+
+use strict;
+use warnings qw(all);
+
+sub main
+{
+  STDOUT->autoflush (1);
+  STDERR->autoflush (1);
+
+  my $log = ChangeLog->new (@_);
+  while ($_ = $log->format_log_entry()) { print $_ }
+}
+
+main (@ARGV);
+
+# eof
