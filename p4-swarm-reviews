@@ -1,5 +1,5 @@
 #!/usr/bin/env perl
-# $Id: p4-swarm-reviews,v 1.19 2018/08/15 00:00:15 friedman Exp $
+# $Id: p4-swarm-reviews,v 1.20 2018/09/28 19:38:19 friedman Exp $
 
 use strict;
 use warnings qw(all);
@@ -322,7 +322,7 @@ sub jira_issue
   my $fields = $jira->renamed_customfields ($result);
   for my $key (keys %$fields)
     {
-      my $newkey = $jira_issue_fields{$key};
+      my $newkey = $jira_issue_fields{$key} or next;
 
       if (my $newval = $fields->{$key})
         {
