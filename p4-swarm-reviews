@@ -1,5 +1,5 @@
 #!/usr/bin/env perl
-# $Id: p4-swarm-reviews,v 1.20 2018/09/28 19:38:19 friedman Exp $
+# $Id: p4-swarm-reviews,v 1.21 2019/06/26 22:30:10 friedman Exp $
 
 use strict;
 use warnings qw(all);
@@ -431,7 +431,7 @@ sub parse_options
   pod2usage (-exitstatus => 0, -verbose => $help) if $help >= 0;
 
   $opt{swarm_user} = $ENV{SUDO_USER} || $ENV{USER} || $ENV{LOGNAME}
-    if ($opt{action} && ! $opt{swarm_user});
+    unless $opt{swarm_user};
 
   if ($opt{swarm_user} && ! $opt{swarm_pass})
     {
