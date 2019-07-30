@@ -1,5 +1,5 @@
 #!/usr/bin/env perl
-# $Id: p4-swarm-reviews,v 1.21 2019/06/26 22:30:10 friedman Exp $
+# $Id: p4-swarm-reviews,v 1.22 2019/07/24 20:48:35 friedman Exp $
 
 use strict;
 use warnings qw(all);
@@ -17,7 +17,7 @@ use NF::Jira;
 
 our %opt = ( show_files => 0,
 
-             swarm_host => 'http://swarm.perforce.com',
+             swarm_host => 'https://swarm.perforce.com',
              swarm_user => undef,
              swarm_pass => undef,
 
@@ -34,12 +34,12 @@ my $line_maxlen = (($ENV{TERM} eq 'emacs'
                    # where tab-width=8
                    : 56);
 
-my @review_fields   = (qw(id author description
+my @review_fields   = (qw(id author description participants
                           changes commits commitStatus
                           created updated
                           state));
 
-my @activity_fields = (qw(id action user change streams));
+my @activity_fields = (qw(id action link user change streams));
 
 my @jira_issue_customfields;  # initialized later
 my %jira_issue_fields = ( 'Build Changelist(s)'    => 'bld_changes',
@@ -59,7 +59,7 @@ my %jira_issue_fields = ( 'Build Changelist(s)'    => 'bld_changes',
       $swarm = NF::P4Swarm->new ( host => $opt{swarm_host},
                                   user => $opt{swarm_user},
                                   pass => $opt{swarm_pass},
-                                  api_version => 'v2' );
+                                  api_version => 'v9' ); # minimum api for voting
     }
 }
 
@@ -171,6 +171,16 @@ sub parse_activity
   for my $activity (@$list)
     {
       my $review;
+      if (ref $activity->{streams} eq 'HASH')
+        {
+          # Later API versions changed from array to hash.
+          # Convert back to array, since this is more directly useful to us.
+          $activity->{streams}
+            = [ map { $activity->{streams}->{$_}
+                    } sort { $a <=> $b
+                           } keys %{$activity->{streams}} ];
+        }
+
       for my $stream (@{$activity->{streams}})
         {
           if ($stream =~ /^review-(\d+)$/)
@@ -409,14 +419,19 @@ sub parse_options
       "f|files"         => \$opt{show_files},
       "w|wait-commit"   => \$opt{wait_commit},
 
+      "version=i"       => \$opt{version},
+
       # Even though these all call the same fn, they must be separate
       # because $_[0] is always the first option in any "a|b" string.
       "approve"         => $action_fn,
       "commit"          => $action_fn,
       "reject"          => $action_fn,
       "archive"         => $action_fn,
-      "needs_review|needs-review" => $action_fn,
-      "needs_revision|needs-revision" => $action_fn,
+      "needs_review|needs-review"       => $action_fn,
+      "needs_revision|needs-revision"   => $action_fn,
+      "vote_up|vote-up|upvote"          => $action_fn,
+      "vote_down|vote-down|downvote"    => $action_fn,
+      "vote_clear|vote-clear|clearvote" => $action_fn,
 
       "jh|jira-host=s"  => \$opt{jira_host},
       "ju|jira-user=s"  => \$opt{jira_user},
@@ -481,14 +496,21 @@ sub main
   my $swarm = swarm();
   if ($opt{action})
     {
-      my %w = ( wait => 'true' ) if $opt{action} eq 'commit' && $opt{wait_commit};
       my $fn = $opt{action};
+      my %w;
+      $w{wait}    = 'true'        if $opt{wait_commit}     && $fn eq 'commit';
+      $w{version} = $opt{version} if defined $opt{version} && $fn =~ /vote/;
       map { my $result = eval { $swarm->$fn ($_, %w) };
             if ($@)
               { print STDERR $@, "\n" if $@ }
-            else
+            elsif (exists $result->{review})
               {
                 printf "%s: %s\n", $_, $result->{review}->{stateLabel};
+              }
+            elsif (exists $result->{messages})
+              {
+                my $id = $_;
+                map { printf "%s: %s\n", $id, $_ } @{$result->{messages}};
               }
           } @list;
       print "\n" if @list;
