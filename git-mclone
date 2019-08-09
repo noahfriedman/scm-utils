@@ -1,10 +1,11 @@
 #!/bin/sh
-# $Id: git-mclone,v 1.6 2017/12/20 22:40:39 friedman Exp $
+# $Id: git-mclone,v 1.7 2018/09/30 23:31:26 friedman Exp $
 
 case $1 in
-    --bare   ) mode=$1 ; shift  ;;
-    --mirror ) mode=$1 ; shift  ;;
-    *        ) mode=--recursive ;;
+    --bare        ) mode=$1 ; shift  ;;
+    --mirror      ) mode=$1 ; shift  ;;
+    --no-checkout ) mode=$1 ; shift  ;;
+    *             ) mode=--recursive ;;
 esac
 
 for url in "$@"; do
