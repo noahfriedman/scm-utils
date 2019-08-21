@@ -6,8 +6,9 @@
 
 # Commentary:
 
-# Usage: cd to-top-of-repo; git-restore-commit-mtime;
-# optional arg: revision range, e.g. "@{yesterday}..@"
+# Usage: git-restore-commit-mtime {-C dir} {revrange}
+#        git {-C dir} restore-commit-mtime {revrange}
+# revrange can be in the form e.g. "@{yesterday}..@"
 
 # If you regularly pull a snapshot (say, once a day) and want to fix mtimes
 # on just files committed since then, you can use a revision range like the
@@ -16,46 +17,52 @@
 
 # TODO:
 #
-# * find root of git repo and modify file names to be relative to that, so
-#   that you don't have to be at the root of the repo before running command.
-# * Verbose options.  Options in general.
+# * Verbose options.
 # * Documentation.
 
 # Code:
 
-$^W = 1;  # enable warnings
-
 use strict;
+use warnings qw(all);
+
+use Getopt::Long;
+use Pod::Usage;
+
+# Special handling to work around emacs repo touching every goddamned file
+# every year just to change the copyright year, even if nothing else in the
+# file ever changes.
+my $emacs_repo = 0;
+my $emacscr_re = qr/(?:add|update).*copyright|copyright.year|arch.tag|gplv3/i;
+
+my @git_cmd = ($ENV{GITPROG} || "git");
 
 # Like `` but avoids shell exec/reparsing.
 sub cmd_out
 {
-  my $fh;
-  my $pid = open ($fh, "-|");
+  my $pid = open (my $fh, "-|");
   die "fork: $!" unless defined $pid;
-
   local $/ = wantarray ? $/ : undef;
-  return <$fh> if $pid;                # parent
-
-  exec ({ $_[0] } @_) or die "exec: $_[0]: $!";  # child
+  return <$fh> if $pid;                           # parent
+  exec ({ $_[0] } @_) or die "exec: $_[0]: $!\n"; # child
 }
+
+sub git { return cmd_out (@git_cmd, @_) }
 
 sub git_live_files
 {
-  map { $_ => undef }
-      split (/\0/, cmd_out (qw(git ls-tree -z -r --name-only @)));
+  map { $_ => undef } split (/\0/, git (qw(ls-tree -z -r --name-only @)));
 }
 
 sub git_log_data
 {
-  @_ = '@' unless @_;
-  splice( @_, 1, 0, '--' ) if ( @_ > 1
-                                && $_[0] =~ m=\@|.+?\.\..+=
-                                && $_[1] ne '--' );
+  unshift @_, '@' if !@_ || $_[0] !~ m=\@|.+?\.\..+=;
+  splice( @_, 1, 0, '--' ) if ( @_ < 2 || $_[1] ne '--' );
+  push @_, "." if $_[$#_] eq '--';
 
   # n.b. adding paths to get commits with files slows this down considerably.
   # We skip the file-less commits below anyway.
-  my $data = cmd_out (qw(git log -z --format=format:%ct --name-only --relative), @_);
+  my $format = $emacs_repo ? "%ct\001%s\001" : "%ct";
+  my $data = git (qw(log -z), "--format=format:$format", qw(--name-only --relative), @_);
   my %tbl;
 
   # Generate a map of what files are "live", so that we can ignore file
@@ -65,6 +72,7 @@ sub git_log_data
   # This was found to be the best compromise between speed and memory.
   # Overly complex regex matching is slower because of backtracking, and
   # pre-splitting the data chunk on \0\0 doubles the amount of memory used.
+  my $summary = "";
   my ($off, $len) = (0, length $data);
   while ($off < $len)
     {
@@ -72,7 +80,8 @@ sub git_log_data
       my ($mtime, $files)
         = split (/\n/, substr ($data, $off, $end - $off), 2);
 
-      if ($files)
+      ($mtime, $summary) = split (m/\001/, $mtime, 3) if $emacs_repo;
+      if ($files && $summary !~ /$emacscr_re/)
         {
           $mtime =~ s/^.*\0//;  # skip changelists with no files
           map { $tbl{$_} = $mtime
@@ -118,8 +127,30 @@ sub set_mtimes
     }
 }
 
+sub parse_options
+{
+  my $help = -1;
+  local *ARGV = \@{$_[0]}; # modify our local arglist, not real ARGV.
+
+  my $parser = Getopt::Long::Parser->new;
+  $parser->configure (qw(pass_through no_ignore_case no_auto_abbrev no_bundling));
+  my $succ = $parser->getoptions
+    ( 'h|?|help+'        => \$help,
+      'C=s'              => sub { push @git_cmd, '-C', $_[1] },
+      'emacs'            => \$emacs_repo,
+    );
+
+  pod2usage (-exitstatus => 1, -verbose => 0)     unless $succ;
+  pod2usage (-exitstatus => 0, -verbose => $help) if $help >= 0;
+}
+
 sub main
 {
+  parse_options (\@_);
+  push @ARGV, (qw(@ -- .)) unless @_;
+  # Use manual option for now.
+  #$emacs_repo = 1 if git (qw(ls-tree --full-tree --name-status -r @ -- src/emacs.c));
+
   my $tbl = git_log_data (@_);
   set_mtimes ($tbl);
 }
