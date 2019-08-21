@@ -1,5 +1,5 @@
-#!/bin/sh
-# $Id: git-mclone,v 1.8 2019/08/09 07:49:01 friedman Exp $
+#!/bin/sh -x
+# $Id: git-mclone,v 1.9 2019/08/21 19:46:53 friedman Exp $
 
 case $1 in
     --bare        ) mode=$1 ; shift  ;;
@@ -10,7 +10,7 @@ case $1 in
 esac
 
 emptydir=${XDG_RUNTIME_DIR-${TMPDIR-/tmp}}/empty.$$
-trap 'rmdir "$emptydir"' 0 1 2 3 15
+trap 'rm -rf "$emptydir"' 0 1 2 3 15
 (umask 077; mkdir -p "$emptydir")
 
 for url in "$@"; do
