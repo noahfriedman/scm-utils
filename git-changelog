@@ -4,13 +4,24 @@
 # Created: 2019-06-22
 # Public domain
 
-# $Id$
+# $Id: git-changelog,v 1.1 2019/06/23 08:26:52 friedman Exp $
 
 # Commentary:
 
-# Usage: cd to-top-of-repo; git-changelog
+# Usage: git-changelog {-C dir} {revrange} {-- {files...}}
+#        git {-C dir} changelog {revrange} {-- {files...}}
 # optional arg: revision range, e.g. "@{yesterday}..@"
 # Other standard log args (e.g. -n) also applicable
+
+# Currently, if you enumerate specific files, the changelog won't list any
+# other files that are part of the commit except the ones specified.
+#
+# To see the full filelog of those changes, you need instead to use `git
+# rev-list' to get a list of commit ids, and then produce the log for those
+# commits separately.  Since `git log' can only show one revrange at a
+# time, it might be more efficient to use a single `git cat-file --batch'
+# process and traverse treeish objects manually with a bidirectional pipe.
+# The output for tree objects is binary, so they will require some unpacking.
 
 # Code:
 
@@ -31,30 +42,39 @@ my %change_label =
     B => 'broken',
   );
 
-my $log_format = join ("%x00", qw( chash:%h  thash:%t
-                                 aname:%aN amail:%aE adate:%aI
-                                 cname:%cN cmail:%cE cdate:%cI
-                                 desc:%B note:%N refs:%D filelog:));
+my @git_cmd = ($ENV{GITPROG} || "git");
 
-my $git_cmd = $ENV{GIT} || "git";
-my @log_cmd = ( "log",
+my $log_format = join ("%x00", qw( chash:%h   thash:%t     sref:%S
+                                   aname:%aN  amail:%aE   adate:%aI
+                                   cname:%cN  cmail:%cE   cdate:%cI
+                                    desc:%B    note:%N  filelog:));
+
+# n.b. you can use "--follow" to follow renames, but that only works for
+# single files so it's not useful as a default option.
+my @log_cmd = ( "rev-list",
+                "--single-worktree",
                 "--pretty=format:$log_format%x00",
                 "--name-status",
                 "--no-merges",
+                "--no-color",
                 "-z", );
 
+# This can be modified by parse_options, see below
 my $template = q{%(adate)  %(aname)  <%(amail)>  %(chash):%(thash)
 
 %(committedby)%n%n%(desc)%n%(note)%n%(filelog)%n%n};
 
+# Like `` but avoids shell exec/reparsing.
 sub __cmd_out
 {
   my $pid = open (my $fh, "-|");
   die "fork: $!\n" unless defined $pid;
   local $/ = wantarray ? $/ : undef;
-  return <$fh> if $pid; # parent
-  exec ({ $_[0] } @_) or die "exec: $_[0]: $!\n";
+  return <$fh> if $pid;                           # parent
+  exec ({ $_[0] } @_) or die "exec: $_[0]: $!\n"; # child
 }
+
+sub __git { return __cmd_out (@git_cmd, @_) }
 
 sub __fold_text
 {
@@ -108,12 +128,7 @@ sub new
 sub get_log_data
 {
   my $self = shift;
-
-  @_ = '@' unless @_;
-  splice( @_, 1, 0, '--' ) if ( @_ > 1
-                                && $_[0] =~ m=\@|.+?\.\..+=
-                                && $_[1] ne '--' );
-  $self->{data} = __cmd_out ($git_cmd, @log_cmd, @_) . "\0";
+  $self->{data} = __git (@log_cmd, @_) . "\0";
 }
 
 sub next_log_entry
@@ -174,7 +189,7 @@ sub _format_filelog
   my $self  = shift;
   my $entry = shift;
 
-  my %flog = %{$entry->{filelog}}; # destructively modified
+  my %flog = %{$entry->{filelog}}; # copy since destructively modified
   my @fmtflog;
   my $fn = sub
     {
@@ -285,8 +300,36 @@ package main;
 use strict;
 use warnings qw(all);
 
+use Getopt::Long;
+use Pod::Usage;
+
+sub parse_options
+{
+  my $help = -1;
+  local *ARGV = \@{$_[0]}; # modify our local arglist, not real ARGV.
+
+  my $parser = Getopt::Long::Parser->new;
+  $parser->configure (qw(pass_through no_ignore_case no_auto_abbrev no_bundling));
+  my $succ = $parser->getoptions
+    ( 'h|?|help+'        => \$help,
+      'C=s'              => sub { push @git_cmd, '-C', $_[1] },
+    );
+
+  pod2usage (-exitstatus => 1, -verbose => 0)     unless $succ;
+  pod2usage (-exitstatus => 0, -verbose => $help) if $help >= 0;
+
+  for my $arg (@ARGV)
+    {
+      last if $arg eq '--';
+      next unless $arg =~ /^--(?:all|reflog|branches|tags|remotes)(?:=|$)/;
+      $template =~ s=\(thash\)=(thash)  %(sref)=;
+      last;
+    }
+}
+
 sub main
 {
+  parse_options (\@_);
   STDOUT->autoflush (1);
   STDERR->autoflush (1);
 
