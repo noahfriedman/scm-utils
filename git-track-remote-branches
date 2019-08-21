@@ -6,37 +6,41 @@
 
 # Commentary:
 
-# Usage: cd to-top-of-repo; git-track-remote-branches
+# Usage: git-track-remote-branches {-C dir}
+#        git {-C dir} track-remote-branches
 
 # Code:
 
-$^W = 1;  # enable warnings
-
 use strict;
+use warnings qw(all);
+
+my @git_cmd = ($ENV{GITPROG} || "git");
 
 # Like `` but avoids shell exec/reparsing.
 sub cmd_out
 {
-  my $fh;
-  my $pid = open ($fh, "-|");
+  my $pid = open (my $fh, "-|");
   die "fork: $!" unless defined $pid;
-
   local $/ = wantarray ? $/ : undef;
   return <$fh> if $pid;                          # parent
   exec ({ $_[0] } @_) or die "exec: $_[0]: $!";  # child
 }
+
+sub git { return cmd_out (@git_cmd, @_) }
 
 sub git_branch
 {
   my %result;
   map { s=^\*?\s*(?:remotes/)?==;
         $result{$_} = undef unless / -> /;
-      } split (/[\r\n]+/, cmd_out (qw(git branch --column=never), @_));
+      } split (/[\r\n]+/, git (qw(branch --column=never), @_));
   return %result;
 }
 
 sub main
 {
+  push @git_cmd, (shift, shift) if (@_ > 1 && $_[0] eq '-C');
+
   my %loc = git_branch ("-l");
   my %rem = git_branch ("-r");
 
@@ -51,7 +55,7 @@ sub main
           }
       } keys %rem;
 
-  map { system (qw(git branch --track), $rem{$_}, $_);
+  map { system (@git_cmd, qw(branch --track), $rem{$_}, $_);
       } sort keys %rem;
 }
 
