@@ -1,5 +1,12 @@
 #!/usr/bin/env bash
-# $Id: git-update,v 1.8 2018/03/08 02:56:42 friedman Exp $
+# git-update --- combine fetch/pull/submodules/lfs/rebase of workspace
+# Author: Noah Friedman <friedman@splode.com>
+# Created: 2015-10-31
+# Public domain
+
+# $Id: git-update,v 1.9 2018/09/30 23:31:26 friedman Exp $
+
+git() { command ${GITPROG-git} "$@"; }
 
 git_revno()
 {
@@ -80,7 +87,7 @@ main()
                 revno_old=`git_revno`
                 git pull "${gitargs[@]}" --all --no-stat --recurse-submodules
                 revno_new=`git_revno`
-                git-restore-commit-mtime $revno_old..$revno_new
+                git restore-commit-mtime $revno_old..$revno_new
 
                 fastforward_refs
             fi
