@@ -4,7 +4,7 @@
 # Created: 2019-06-22
 # Public domain
 
-# $Id: git-changelog,v 1.1 2019/06/23 08:26:52 friedman Exp $
+# $Id: git-changelog,v 1.2 2019/08/21 19:26:06 friedman Exp $
 
 # Commentary:
 
@@ -51,7 +51,7 @@ my $log_format = join ("%x00", qw( chash:%h   thash:%t     sref:%S
 
 # n.b. you can use "--follow" to follow renames, but that only works for
 # single files so it's not useful as a default option.
-my @log_cmd = ( "rev-list",
+my @log_cmd = ( "log",
                 "--single-worktree",
                 "--pretty=format:$log_format%x00",
                 "--name-status",
