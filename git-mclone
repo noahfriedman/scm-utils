@@ -1,5 +1,5 @@
-#!/bin/sh -x
-# $Id: git-mclone,v 1.9 2019/08/21 19:46:53 friedman Exp $
+#!/bin/sh
+# $Id: git-mclone,v 1.10 2019/08/21 20:03:57 friedman Exp $
 
 case $1 in
     --bare        ) mode=$1 ; shift  ;;
