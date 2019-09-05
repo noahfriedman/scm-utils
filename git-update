@@ -4,8 +4,6 @@
 # Created: 2015-10-31
 # Public domain
 
-# $Id: git-update,v 1.9 2018/09/30 23:31:26 friedman Exp $
-
 git() { command ${GITPROG-git} "$@"; }
 
 git_revno()
@@ -76,6 +74,9 @@ main()
             cd "$dir" || exit $?
 
             if ! has_remotes; then
+                if [ -f .gitmodules ]; then
+                    git submodule update --rebase --recursive --no-recommend-shallow
+                fi
                 #echo "repository has no upstream remotes"
                 return 0
             fi
@@ -94,6 +95,7 @@ main()
         )
 
         test $# -gt 1 && echo
+        :
     done
 }
 
