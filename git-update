@@ -75,7 +75,12 @@ main()
 
             if ! has_remotes; then
                 if [ -f .gitmodules ]; then
-                    git submodule update --rebase --recursive --no-recommend-shallow
+                    git submodule foreach -q 'echo $path' |
+                        while read path; do
+                            echo "$path"
+                            git -C "$path" update
+                            echo
+                        done
                 fi
                 #echo "repository has no upstream remotes"
                 return 0
