@@ -1,5 +1,5 @@
 #!/usr/bin/env perl
-# $Id: p4-swarm-reviews,v 1.22 2019/07/24 20:48:35 friedman Exp $
+# $Id: p4-swarm-reviews,v 1.23 2019/07/30 17:35:13 friedman Exp $
 
 use strict;
 use warnings qw(all);
@@ -157,9 +157,10 @@ sub parse_review
               map { $f->{$_} = $j->{$_} } keys %$j if $j;
             }
 
-          $f->{summary} = $1 if ($desc =~ m=^(.+)$=m);
-          $f->{summary} .= "..."
+          $f->{summary} = $1 if ($desc =~ m=^(.+?)\s*$=m);
+          $f->{summary} .= " ..."
             if (length ($desc) - length ($1)) > 2;
+          $f->{summary} =~ s/\r//g;
         }
     }
 }
