@@ -263,7 +263,9 @@ sub format_log_entry
   $entry{desc} =~ s/^\s+$//gm;
 
   if (   $entry{cname} ne $entry{aname}
-      || $entry{cmail} ne $entry{amail})
+      || (   defined $entry{cmail}
+          && defined $entry{amail}
+          && $entry{cmail} ne $entry{amail}))
     {
       $entry{committedby} =
         sprintf( "\tCommitted-by: %s <%s> %s",
