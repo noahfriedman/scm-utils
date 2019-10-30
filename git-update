@@ -25,6 +25,44 @@ has_remotes()
     git config --local --get-regexp '^remote\..*\.url$' > /dev/null
 }
 
+num_remotes()
+{
+    declare -i i=0
+    git config --local --get-regexp '^remote\..*\.url$' |
+        while read line; do
+            i=$((i + 1))
+        done
+    echo $i
+}
+
+num_jobs()
+{
+    declare -i n=1
+    case ${OSTYPE-`uname -s`} in
+        *[Ll]inux* ) n=`grep -c '^processor[	]*:' /proc/cpuinfo`  ;;
+    esac
+
+    if [ $n -gt 4 ]; then n=$((n / 2)); fi
+    echo $n
+}
+
+# If you want submodules to be at higher revisions than the superproject
+# expects at any given time, you should disable submodule recursion
+# by running:
+#
+#	git config --local --replace-all update.recurse-submodules no
+#
+# and use
+#
+#	git submodule foreach git update
+#
+# to update the submodules independently of the superproject.
+recurse_flag()
+{
+    local flag=`git config --local --get update.recurse-submodules`
+    echo --recurse-submodules=${flag:-yes}
+}
+
 # Fast forward, without checkout, any non up-to-date local branches that
 # have no local commits which would need merging with the upstream.
 fastforward_refs()
@@ -50,6 +88,7 @@ apush() { eval "$1=(\"\${$1[@]}\" \"\${@:2}\")"; }
 
 main()
 {
+    declare -a gitargs
     while :; do
         case $1 in
             -r | --rebase ) shift; apush gitargs --rebase=preserve ;;
@@ -90,8 +129,22 @@ main()
                 git fetch --all
                 test -d lfs/objects && git lfs fetch --all
             else
+                declare -a xopts=( --no-stat `recurse_flag` )
+
+                j=`num_jobs`
+                if [ $j -gt 1 ]; then
+                    apush xopts --jobs=$j
+                fi
+
+                # git 2.21 (and maybe others) will fetch submodules twice
+                # if you use both --all and --recursive-submodules, so
+                # don't use it unless there are really more than 1 remotes.
+                # Also, the first fetch won't honor --jobs so it's
+                # especially slow.
+                if [ `num_remotes` -gt 1 ]; then apush xopts --all; fi
+
                 revno_old=`git_revno`
-                git pull "${gitargs[@]}" --all --no-stat --recurse-submodules
+                git pull "${gitargs[@]}" "${xopts[@]}"
                 revno_new=`git_revno`
                 git restore-commit-mtime $revno_old..$revno_new
 
