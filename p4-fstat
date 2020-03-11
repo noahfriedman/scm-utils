@@ -234,9 +234,8 @@ sub main
       my @row = exists $r->{$xFile} ? $r->{$xFile} : $r->{depotFile};
       prune_local ($row[0]) if $opt{localpath};
 
-      push @row, (exists $r->{action}
-                  ? @{$r}{@fieldsO}
-                  : @{$r}{@fieldsP});
+      if (exists $r->{action}) { map { push @row, ($r->{$_} || "") } @fieldsO }
+      else                     { push @row, @{$r}{@fieldsP} }
 
       for (my $i = 0; $i < @row; $i++)
         {
