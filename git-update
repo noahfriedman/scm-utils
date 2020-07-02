@@ -91,7 +91,7 @@ main()
     declare -a gitargs
     while :; do
         case $1 in
-            -r | --rebase ) shift; apush gitargs --rebase=merge ;;
+            -r | --rebase ) shift; apush gitargs --rebase=merges ;;
             -p | --prune  ) shift; apush gitargs --prune ;;
             * ) break ;;
         esac
