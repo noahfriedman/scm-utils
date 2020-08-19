@@ -33,6 +33,7 @@ use Pod::Usage;
 # file ever changes.
 my $emacs_repo = 0;
 my $emacscr_re = qr/(?:add|update).*copyright|copyright.year|arch.tag|gplv3/i;
+my $author_time = 0;
 
 my @git_cmd = ($ENV{GITPROG} || "git");
 
@@ -61,7 +62,9 @@ sub git_log_data
 
   # n.b. adding paths to get commits with files slows this down considerably.
   # We skip the file-less commits below anyway.
-  my $format = $emacs_repo ? "%ct\001%s\001" : "%ct";
+  my $format = $author_time ? "%at" : "%ct";
+  $format .= "\001%s\001" if $emacs_repo;
+
   my $data = git (qw(log -z), "--format=format:$format", qw(--name-only --relative), @_);
   my %tbl;
 
@@ -138,6 +141,7 @@ sub parse_options
     ( 'h|?|help+'        => \$help,
       'C=s'              => sub { push @git_cmd, '-C', $_[1] },
       'emacs'            => \$emacs_repo,
+      'A|author'         => \$author_time,
     );
 
   pod2usage (-exitstatus => 1, -verbose => 0)     unless $succ;
