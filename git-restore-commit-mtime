@@ -65,7 +65,7 @@ sub git_log_data
   my $format = $author_time ? "%at" : "%ct";
   $format .= "\001%s\001" if $emacs_repo;
 
-  my $data = git (qw(log -z), "--format=format:$format", qw(--name-only --relative), @_);
+  my $data = git (qw(log -z), "--format=format:$format", qw(--name-only --relative --max-parents=1), @_);
   my %tbl;
 
   # Generate a map of what files are "live", so that we can ignore file
