@@ -1,0 +1,25 @@
+#!/bin/sh
+
+clone()
+{
+    local url=$1 repo=${1##*/}.fossil
+    case $url in '#'* ) return ;; esac
+    test -f $repo && continue
+    echo "########################################"
+    echo "$url $repo"
+    echo
+    fossil clone -u $url $repo
+    echo
+    echo "########################################"
+}
+
+main()
+{
+    for url in "$@"; do
+        clone "$url"
+    done
+}
+
+main "$@"
+
+# eof
