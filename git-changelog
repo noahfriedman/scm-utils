@@ -262,7 +262,8 @@ sub format_log_entry
   $entry{desc} =~ s/^/\t/gm;
   $entry{desc} =~ s/^\s+$//gm;
 
-  if (   $entry{cname} ne $entry{aname}
+  if (   $entry{cdate} ne $entry{adate}
+      || $entry{cname} ne $entry{aname}
       || (   defined $entry{cmail}
           && defined $entry{amail}
           && $entry{cmail} ne $entry{amail}))
@@ -305,6 +306,15 @@ use warnings qw(all);
 use Getopt::Long;
 use Pod::Usage;
 
+sub delq
+{
+  my ($elt, $list) = @_;
+  my $i = 0;
+
+  while ($i <= $#$list)
+    { splice (@$list, --$i, 1) if ($list->[$i++] || '') eq $elt }
+}
+
 sub parse_options
 {
   my $help = -1;
@@ -315,6 +325,8 @@ sub parse_options
   my $succ = $parser->getoptions
     ( 'h|?|help+'        => \$help,
       'C=s'              => sub { push @git_cmd, '-C', $_[1] },
+      'fmt|format=s'     => \$template,
+      'F|no-filelog'     => sub { delq( "--name-status", \@log_cmd ) }
     );
 
   pod2usage (-exitstatus => 1, -verbose => 0)     unless $succ;
