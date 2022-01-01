@@ -32,7 +32,7 @@ use Pod::Usage;
 # every year just to change the copyright year, even if nothing else in the
 # file ever changes.
 my $emacs_repo = 0;
-my $emacscr_re = qr/(?:add|update).*copyright|copyright.year|arch.tag|gplv3/i;
+my $emacscr_re = qr/(?:add|update|run|set-).*copyright|copyright.year|arch.tag|gplv3/i;
 my $author_time = 0;
 
 my @git_cmd = ($ENV{GITPROG} || "git");
