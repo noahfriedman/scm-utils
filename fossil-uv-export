@@ -1,19 +1,31 @@
 #!/bin/sh
 
-repo=$1
-shift
+uv_export()
+{
+    local repo=$1
+    shift
 
-uvdir=${repo##*/}
-uvdir=${uvdir%.fossil}.uv
-dst=$uvdir/export
+    local uvdir=${repo##*/}
+    local uvdir=${uvdir%.fossil}.uv
+    local dst=$uvdir/export
 
-mkdir -p $dst
+    mkdir -p $dst
 
-fossil uv ls -l -R $repo |
-    while read cksum date time size1 size2 file; do
-        echo $file
-        fossil uv export -R $repo $file $dst/$file
-        touch -d "$date $time" $dst/$file
+    fossil uv ls -l -R $repo |
+        while read cksum date time size1 size2 file; do
+            echo $file
+            fossil uv export -R $repo $file $dst/$file
+            touch -d "$date $time" $dst/$file
+        done
+}
+
+main()
+{
+    for repo in "$@"; do
+        uv_export "$repo"
     done
+}
+
+main "$@"
 
 # eof
