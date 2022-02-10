@@ -6,11 +6,6 @@ for repo in "$@"; do
     git -C "$repo" config --local --get-regexp '^remote\..*\.url$' || echo $?
 done |
     sed 's= remote\.\([^ ]*\)\.url = \1 =' |
-    if [ -t 1 ]; then
-        # only fold at long columns if stdout is to a tty
-        column -t -s'  ' -E1
-    else
-        column -t -s'  '
-    fi
+    column -t -s'  '
 
 # eof
