@@ -1,0 +1,63 @@
+#!/bin/sh
+
+docmd()
+{
+    case $verbose in
+        t ) (set -x; "$@") ;;
+        * ) "$@" ;;
+    esac
+}
+
+xstat()
+{
+    u_sys=${u_sys-`uname -s`}
+
+    case $u_sys in
+        Linux )
+            stat -c "%u:%g %a %Y %C"     "$@" ;;
+        FreeBSD | NetBSD | Darwin )
+            stat -f '%u:%g %OMp%OLp %Dm' "$@" ;;
+    esac 2> /dev/null
+}
+
+main()
+{
+    verbose=
+    case $1 in
+        -[vx] ) verbose=t ; shift ;;
+    esac
+
+    for f in "$@"; do
+        set x `xstat "$f"`
+
+        had_orig=no
+        if [ -f "$f.orig" ]; then
+            had_orig=yes
+        fi
+
+        docmd git restore -- "$f"
+        test -f "$f" || continue
+
+        case $had_orig in
+            no ) test -f "$f.orig" && docmd rm "$f.orig" ;;
+        esac
+
+        t=`git log -n1 --format='%ct' -- "$f" 2> /dev/null`
+        case $t in '' ) t=$4 ;; esac
+        docmd touch -d "@$t" "$f"
+
+        case $# in
+            4 | 5 )
+                docmd  chown     "$2" "$f"
+                docmd  chmod     "$3" "$f"
+                case $5 in
+                    *:*:* ) docmd chcon "$5" "$f" ;;
+                esac
+                : ;; # always return success
+        esac
+    done
+}
+
+main "$@"
+
+# eof
