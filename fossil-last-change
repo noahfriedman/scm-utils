@@ -1,0 +1,8 @@
+#!/bin/sh
+# Quick sanity check that fossil mirrors are getting updated.
+
+for repo in "$@"; do
+    tm=`fossil timeline -R "$repo" -n 1 -F 'M:%d' |
+            sed -ne '/^M:\(.*\)/s//\1/p'`
+    echo "$tm" "$repo"
+done
