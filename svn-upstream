@@ -1,9 +1,11 @@
 #!/bin/sh
-# $Id$
-
-# This relies on a private prop used by svn-mirror
 
 for repo in "$@"; do
-    svnlook propget --revprop -r0 "$repo" svn:sync-from-url
-    echo
+    if [ -f "$repo/.svn/wc.db" ]; then
+        sqlite3 -noheader -batch "$repo/.svn/wc.db" "select root from repository"
+    else
+        # This relies on a private prop used by svn-mirror
+        svnlook propget --revprop -r0 "$repo" svn:sync-from-url
+        echo
+    fi
 done
