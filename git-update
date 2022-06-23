@@ -126,7 +126,11 @@ main()
             fi
 
             if bare_repo_p; then
-                git fetch --all --tags
+                # git-2.35 "--all" overrides "--no-write-fetch-head",
+                # so do each remote separately.
+                for remote in `git remote`; do
+                    git fetch --no-write-fetch-head --tags $remote
+                done
                 test -d lfs/objects && git lfs fetch --all
 
                 # No reason to clutter the filesystem with these for mirrored repos
