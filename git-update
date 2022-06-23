@@ -126,8 +126,11 @@ main()
             fi
 
             if bare_repo_p; then
-                git fetch --all
+                git fetch --all --tags
                 test -d lfs/objects && git lfs fetch --all
+
+                # No reason to clutter the filesystem with these for mirrored repos
+                git pack-refs --all
             else
                 declare -a xopts=( --no-stat `recurse_flag` )
 
@@ -138,7 +141,7 @@ main()
 
                 # git 2.21 (and maybe others) will fetch submodules twice
                 # if you use both --all and --recursive-submodules, so
-                # don't use it unless there are really more than 1 remotes.
+                # don't use it unless there are really more than 1 remote.
                 # Also, the first fetch won't honor --jobs so it's
                 # especially slow.
                 if [ `num_remotes` -gt 1 ]; then apush xopts --all; fi
