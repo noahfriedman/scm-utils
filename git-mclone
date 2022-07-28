@@ -13,21 +13,27 @@ emptydir=${XDG_RUNTIME_DIR-${TMPDIR-/tmp}}/empty.$$
 trap 'rm -rf "$emptydir"' 0 1 2 3 15
 (umask 077; mkdir -p "$emptydir")
 
+: ${GITPROG:=git}
+
 for url in "$@"; do
     localdir=${url##*/}
     localdir=${localdir%.git}.git  # make sure it ends in .git
 
     echo "** $url"
-    ${GITPROG-git} clone $mode --template "$emptydir" -- "$url" "$localdir" || continue
+    $GITPROG clone $mode --template "$emptydir" -- "$url" "$localdir" || continue
 
     if [ -e "$localdir/.git" ]; then
-        ${GITPROG-git} -C "$localdir" restore-commit-mtime
+        $GITPROG -C "$localdir" restore-commit-mtime
     else # bare repo
         if type git-lfs > /dev/null 2>&1; then
-            ${GITPROG-git} -C "$localdir" lfs fetch --all
+            $GITPROG -C "$localdir" lfs fetch --all
+            rmdir -p "$localdir/lfs/tmp" 2> /dev/null
         fi
 
-        tm=`${GITPROG-git} -C "$localdir" log -n1 --format=tformat:%ci`
+        # Not needed for archival and can be generated later.
+        git -C "$localdir" config --local --type bool repack.writeBitmaps false
+
+        tm=`$GITPROG -C "$localdir" log -n1 --format=tformat:%ci`
         find -- "$localdir" -exec touch -d "$tm" '{}' +
     fi
     echo
