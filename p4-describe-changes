@@ -4,21 +4,19 @@
 # Created: 2014-11-13
 # Public domain.
 
-# $Id: p4-describe-changes,v 1.21 2019/02/07 20:14:07 friedman Exp $
-
 # Commentary:
 # Code:
 
 use strict;
 use warnings qw(all);
 
-use FindBin;
-use lib "$FindBin::Bin/../../lib/perl";
-use lib "$ENV{HOME}/lib/perl";
-
 use Getopt::Long;
 use Pod::Usage;
 use POSIX qw(strftime);
+
+use FindBin;
+use lib "$FindBin::Bin/../lib/perl";
+use lib "$ENV{HOME}/lib/perl";
 
 use NF::PrintObject qw(:debug);
 use NF::P4cmd       qw(:direct);
