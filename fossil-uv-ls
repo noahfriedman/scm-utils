@@ -1,0 +1,19 @@
+#!/bin/sh
+
+align()
+{
+    #column -t -R4,5
+    fmtcols -N
+}
+
+main()
+{
+    for repo in "$@"; do
+        echo "** $repo"
+        fossil uv ls -l -R "$repo" | sort -k2,3 -k6 | align
+    done
+}
+
+main "$@"
+
+# eof
