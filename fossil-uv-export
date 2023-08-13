@@ -1,29 +1,55 @@
 #!/bin/sh
 
-uv_export()
+_fossil()
+{
+    # Use `unix-none` vfs to avoid locking over NFS
+    fossil --vfs unix-none "$@"
+}
+
+uv_extract()
 {
     local repo=$1
     shift
 
-    local uvdir=${repo##*/}
-    local uvdir=${uvdir%.fossil}.uv
-    local dst=$uvdir/export
+    local data=$(_fossil uv ls -l -R "$repo")
+    case $data in '' ) return 1 ;; esac
 
-    mkdir -p $dst
+    local basename=${repo##*/}
+    local    uvdir=${basename%.fossil}.uv
+    local    stamp=$(echo "$data" | sort -k2,2 | awk 'END { print $2 }')
+    local      dst=$uvdir.$stamp
+    local      err=0
 
-    fossil uv ls -l -R $repo |
-        while read cksum date time size1 size2 file; do
-            echo $file
-            fossil uv export -R $repo $file $dst/$file
-            touch -d "$date $time" $dst/$file
-        done
+    mkdir -p "$dst"
+    echo "$data" |
+        {
+            while read cksum date time size1 size2 file; do
+                echo $dst/$file
+                if ! _fossil uv export -R "$repo" "$file" "$dst/$file" ; then
+                    err=1
+                    mv -v "$dst" "$dst.BAD"
+                    break
+                fi
+
+                touch -d "$date $time" "$dst/$file"
+                if [ "$date $time" '>' "$fdate $ftime" ]; then
+                    fdate=$date
+                    ftime=$time
+                fi
+            done
+
+            # We have to do this in loop block to keep variable scope
+            if [ $err -eq 0 ] && [ "$fdate" != 0 ]; then
+                touch -d "$fdate $ftime" "$dst"
+            fi
+        }
 }
 
 main()
 {
     for repo in "$@"; do
         echo "** $repo"
-        uv_export "$repo"
+        uv_extract "$repo"
     done
 }
 
