@@ -44,14 +44,15 @@ main()
 
         t=`git log -n1 --format='%ct' -- "$f" 2> /dev/null`
         case $t in '' ) t=$4 ;; esac
-        docmd touch -d "@$t" "$f"
+        docmd touch -h -d "@$t" "$f"
 
         case $# in
             4 | 5 )
-                docmd  chown     "$2" "$f"
-                docmd  chmod     "$3" "$f"
+                # n.b. coreutils chmod has no -h, so test for links ourselves
+                :            && docmd chown -h "$2" "$f"
+                test -L "$f" || docmd chmod    "$3" "$f"
                 case $5 in
-                    *:*:* ) docmd chcon "$5" "$f" ;;
+                    *:*:* )     docmd chcon -h "$5" "$f" ;;
                 esac
                 : ;; # always return success
         esac
