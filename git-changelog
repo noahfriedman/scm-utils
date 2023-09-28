@@ -4,8 +4,6 @@
 # Created: 2019-06-22
 # Public domain
 
-# $Id: git-changelog,v 1.2 2019/08/21 19:26:06 friedman Exp $
-
 # Commentary:
 
 # Usage: git-changelog {-C dir} {revrange} {-- {files...}}
@@ -67,11 +65,9 @@ my $template = q{%(adate)  %(aname)  <%(amail)>  %(chash):%(thash)
 # Like `` but avoids shell exec/reparsing.
 sub __cmd_out
 {
-  my $pid = open (my $fh, "-|");
-  die "fork: $!\n" unless defined $pid;
+  open( my $fh, '-|', @_ ) or die "exec: $_[0]: $!\n";
   local $/ = wantarray ? $/ : undef;
-  return <$fh> if $pid;                           # parent
-  exec ({ $_[0] } @_) or die "exec: $_[0]: $!\n"; # child
+  return <$fh>;
 }
 
 sub __git { return __cmd_out (@git_cmd, @_) }
@@ -103,13 +99,10 @@ sub __fold_text
 
 sub __maxlen
 {
-  my @len = map { length $_ } @_;
-  my $max = shift @len;
-  while (@len)
-    {
-      $max = $len[0] if $len[0] > $max;
-      shift @len;
-    }
+  my $max = length( shift );
+  map { my $len = length( $_ );
+        $max = $len if $len > $max;
+      } @_;
   return $max;
 }
 
@@ -326,7 +319,7 @@ sub parse_options
     ( 'h|?|help+'        => \$help,
       'C=s'              => sub { push @git_cmd, '-C', $_[1] },
       'fmt|format=s'     => \$template,
-      'F|no-filelog'     => sub { delq( "--name-status", \@log_cmd ) }
+      'F|no-filelog'     => sub { delq( "--name-status", \@log_cmd ) },
     );
 
   pod2usage (-exitstatus => 1, -verbose => 0)     unless $succ;
