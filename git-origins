@@ -1,5 +1,9 @@
 #!/bin/sh
 # Display upstream urls in git repositories
+# n.b. similar to `git remote -v' but no separate lines for fetch/push
+# and display local repo directory name.
+
+if [ $# -eq 0 ]; then set . ; fi
 
 for repo in "$@"; do
     echo -n "${repo##*/}" ""
