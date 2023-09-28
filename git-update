@@ -39,7 +39,7 @@ num_jobs()
 {
     declare -i n=1
     case ${OSTYPE-`uname -s`} in
-        *[Ll]inux* ) n=`grep -c '^processor[	]*:' /proc/cpuinfo`  ;;
+        *[Ll]inux* ) n=`nproc` ;;
     esac
 
     if [ $n -gt 4 ]; then n=$((n / 2)); fi
@@ -84,15 +84,13 @@ fastforward_refs()
         done
 }
 
-apush() { eval "$1=(\"\${$1[@]}\" \"\${@:2}\")"; }
-
 main()
 {
     declare -a gitargs
     while :; do
         case $1 in
-            -r | --rebase ) shift; apush gitargs --rebase=merges ;;
-            -p | --prune  ) shift; apush gitargs --prune ;;
+            -r | --rebase ) shift; gitargs+=( --rebase=merges ) ;;
+            -p | --prune  ) shift; gitargs+=( --prune ) ;;
             * ) break ;;
         esac
     done
@@ -140,7 +138,7 @@ main()
 
                 j=`num_jobs`
                 if [ $j -gt 1 ]; then
-                    apush xopts --jobs=$j
+                    xopts+=( --jobs=$j )
                 fi
 
                 # git 2.21 (and maybe others) will fetch submodules twice
@@ -148,7 +146,7 @@ main()
                 # don't use it unless there are really more than 1 remote.
                 # Also, the first fetch won't honor --jobs so it's
                 # especially slow.
-                if [ `num_remotes` -gt 1 ]; then apush xopts --all; fi
+                if [ `num_remotes` -gt 1 ]; then xopts+=( --all ); fi
 
                 revno_old=`git_revno`
                 git pull "${gitargs[@]}" "${xopts[@]}"
