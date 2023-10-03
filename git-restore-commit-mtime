@@ -97,11 +97,11 @@ sub git
 
 sub git_worktree_info
 {
-  my $data = git( qw(worktree list --porcelain -z) );
+  my $data = git( qw(worktree list --porcelain) );
   die "Error from git, cannot continue.\n" unless $cmd_exitstat == 0;
 
   my %info;
-  for my $elt (split( /\0/, $data ))
+  for my $elt (split( /\n/, $data ))
     {
       if ($elt =~ /^(\S+)\s+(.*)/) { $info{$1}   = $2 }
       else                         { $info{$elt} = 1 }
