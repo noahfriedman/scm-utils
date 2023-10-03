@@ -1,5 +1,5 @@
 #!/usr/bin/env perl
-# git-restore-commit-mtime --- sync local files modtime with commit history
+# git-restore-commit-mtime --- sync local file modtimes with commit history
 # Author: Noah Friedman <friedman@splode.com>
 # Created: 2014-11-17
 # Public domain
@@ -10,44 +10,100 @@
 #        git {-C dir} restore-commit-mtime {revrange}
 # revrange can be in the form e.g. "@{yesterday}..@"
 
-# If you regularly pull a snapshot (say, once a day) and want to fix mtimes
-# on just files committed since then, you can use a revision range like the
-# above example, which will significantly prune the commit list that has
-# to be scanned.  This is by far the slowest part of the operation.
+# Why would you want this?  Well, if you're incrementally building from
+# source and pull in updates, you don't; backdating timestamps could break
+# your build.  But for initial checkouts, timestamps show what files are
+# dormant or active areas of work.
 
-# TODO:
-#
-# * Verbose options.
-# * Documentation.
+# If you just keep source trees around for reference and regularly pull a
+# snapshot (say, once a day) and want to fix mtimes on just files committed
+# since then, you can use a revision range like the above example, which
+# will significantly prune the commit list that has to be scanned.  That
+# scan is by far the slowest part of the operation.
+
+# The --emacs option enables special handling to work around the emacs repo
+# touching every goddamned file every year just to change the copyright,
+# even if nothing else in the file ever changes.
 
 # Code:
 
 use strict;
 use warnings qw(all);
 
+use POSIX qw(:sys_wait_h strftime getcwd);
 use Getopt::Long;
-use Pod::Usage;
+#use Pod::Usage;
 
-# Special handling to work around emacs repo touching every goddamned file
-# every year just to change the copyright year, even if nothing else in the
-# file ever changes.
-my $emacs_repo = 0;
-my $emacscr_re = qr/(?:add|update|run|set-).*copyright|copyright.year|arch.tag|gplv3/i;
-my $author_time = 0;
+(my $progname = $0) =~ s=^.*/==;
 
+my %opt = ( emacs_repo  => 0,
+            author_time => 0,
+            verbose     => 0,
+          );
 my @git_cmd = ($ENV{GITPROG} || "git");
+
+our $emacscr_re;
+our $cmd_exitstat = 0;
+our $gitdir;
+
+sub perror
+{
+  print STDERR join( ': ', $progname, @_, "$!\n" ) if $opt{verbose};
+  return; # void
+}
+
+sub cmd_waitpid
+{
+  local $!;   # don't let waitpid() overwrite current error
+  while ((my $pid = waitpid( -1, WNOHANG )) > 0 && WIFEXITED( $? ))
+    {
+      $cmd_exitstat = WEXITSTATUS( $? );
+    }
+}
 
 # Like `` but avoids shell exec/reparsing.
 sub cmd_out
 {
+  local $SIG{CHLD} = \&cmd_waitpid;
   my $pid = open (my $fh, "-|");
   die "fork: $!" unless defined $pid;
-  local $/ = wantarray ? $/ : undef;
-  return <$fh> if $pid;                           # parent
-  exec ({ $_[0] } @_) or die "exec: $_[0]: $!\n"; # child
+  if ($pid) # parent
+    {
+      print STDERR "+ @_\n" if $opt{verbose} > 2;
+      local $/ = undef;
+      my $res = <$fh>;
+      # We have to close the fh explicitly if we want to recover the exit
+      # status of the process.
+      close( $fh );
+      return $res;
+    }
+  else # child
+    {
+      exec( { $_[0] } @_ ) or die "exec: $_[0]: $!\n";
+    }
 }
 
-sub git { return cmd_out (@git_cmd, @_) }
+
+sub git
+{
+  my @cmd = @git_cmd;
+  push( @cmd, '-C', $gitdir ) if $gitdir;
+  return cmd_out( @cmd, @_ );
+}
+
+sub git_worktree_info
+{
+  my $data = git( qw(worktree list --porcelain -z) );
+  die "Error from git, cannot continue.\n" unless $cmd_exitstat == 0;
+
+  my %info;
+  for my $elt (split( /\0/, $data ))
+    {
+      if ($elt =~ /^(\S+)\s+(.*)/) { $info{$1}   = $2 }
+      else                         { $info{$elt} = 1 }
+    }
+  return wantarray ? %info : \%info;
+}
 
 sub git_live_files
 {
@@ -56,42 +112,41 @@ sub git_live_files
 
 sub git_log_data
 {
-  unshift @_, '@' if !@_ || $_[0] !~ m=\@|.+?\.\..+=;
-  splice( @_, 1, 0, '--' ) if ( @_ < 2 || $_[1] ne '--' );
-  push @_, "." if $_[$#_] eq '--';
-
+  unshift( @_, '@' )        if !@_ || $_[0] !~ m=\@|.+?\.\..+=;
+  splice(  @_, 1, 0, '--' ) if  @_ < 2 || $_[1] ne '--';
   # n.b. adding paths to get commits with files slows this down considerably.
   # We skip the file-less commits below anyway.
-  my $format = $author_time ? "%at" : "%ct";
-  $format .= "\001%s\001" if $emacs_repo;
+  #push(   @_, "." )        if $_[$#_] eq '--';
 
-  my $data = git (qw(log -z), "--format=format:$format", qw(--name-only --relative --max-parents=1), @_);
+  my $format = $opt{author_time} ? "%at" : "%ct";
+  $format .= "\001%s\001" if $opt{emacs_repo};
+
+  my $data = git( qw(log -z --name-only --relative --max-parents=1),
+                  "--format=format:$format", @_ );
   my %tbl;
 
   # Generate a map of what files are "live", so that we can ignore file
   # names in the commit logs that are not relevant.
-  my %have = git_live_files ();
+  my %have = git_live_files();
 
   # This was found to be the best compromise between speed and memory.
   # Overly complex regex matching is slower because of backtracking, and
   # pre-splitting the data chunk on \0\0 doubles the amount of memory used.
   my $summary = "";
-  my ($off, $len) = (0, length $data);
+  my ($off, $len) = (0, length( $data ));
   while ($off < $len)
     {
-      my $end = ($data =~ m/\0\0/g) ? pos($data) - 2 : $len;
-      my ($mtime, $files)
-        = split (/\n/, substr ($data, $off, $end - $off), 2);
+      my $end = ($data =~ m/\0\0/g) ? pos( $data ) - 2 : $len;
+      my ($mtime, $files) = split( /\n/, substr( $data, $off, $end - $off ), 2 );
 
-      ($mtime, $summary) = split (m/\001/, $mtime, 3) if $emacs_repo;
-      if ($files && $summary !~ /$emacscr_re/)
+      ($mtime, $summary) = split ( /\001/, $mtime, 3 ) if $opt{emacs_repo};
+      if ($files && !(defined( $emacscr_re ) && $summary =~ /$emacscr_re/o))
         {
-          $mtime =~ s/^.*\0//;  # skip changelists with no files
+          $mtime =~ s/^.*\0//; # skip changelists with no files
           map { $tbl{$_} = $mtime
                   unless exists $tbl{$_} || !exists $have{$_};
-              } split (/\0/, $files);
+              } split( /\0/, $files );
         }
-
       $off = $end;
     }
 
@@ -99,37 +154,88 @@ sub git_log_data
   return \%tbl;
 }
 
-# After restoring file mtimes, set directory mtimes to the time of the most
-# recently edited file in that directory.
-# Directories that are empty other than other directories will inherit the
-# timestamp of some immediate subdirectory, but which one is not specified.
-sub set_mtimes
+
+sub walk_dirtree
 {
-  my $tbl = shift;
+  my ($node, $fn) = @_;
 
-  my %dirtbl;
-  while (my ($file, $mtime) = each %$tbl)
+  &$fn( $node );
+  return unless -d $node;
+
+  opendir( my $fh, $_[0] ) or return;
+  my @files = grep { !/^\.\.?$/ } readdir( $fh ) or return;
+  close( $fh );
+
+  $node =~ s=/+$==;
+  for my $ent (@files)
     {
-      (my $dir = $file) =~ s=/[^/]*$==;
-      $dir = "." if $dir eq $file;
-      $dirtbl{$dir} = $mtime
-        unless exists $dirtbl{$dir} && $dirtbl{$dir} > $mtime;
-
-      utime ($mtime, $mtime, $file);
-    }
-
-  while (my ($dir, $mtime) = each %dirtbl)
-    {
-      utime ($mtime, $mtime, $dir);
-
-      while ($dir =~ m=/=)
-        {
-          $dir =~ s=/[^/]*$==;
-          utime ($mtime, $mtime, $dir) unless exists $dirtbl{$dir};
-        }
+      my $file = join( '/', $node, $ent );
+      next if -l $file;
+      walk_dirtree( $file, $fn );
     }
 }
 
+sub max { my $m = shift; map { $m = $_ if $_ > $m } @_; return $m }
+sub min { my $m = shift; map { $m = $_ if $_ < $m } @_; return $m }
+
+my %file_msg;
+
+sub chmtime
+{
+  my $mtime = shift;
+  if ($opt{verbose})
+    {
+      my $fmt = '%Y-%m-%d %H:%M:%S';
+      my $n = strftime( $fmt, localtime( $mtime ));
+
+      map { my @st = lstat $_;
+            my $otime = $st[9] ;
+            my $o = strftime( $fmt, localtime( $st[9] ));
+
+            (my $file = $_) =~ s=^\./==;
+            if ($otime == $mtime)
+              {
+                $file_msg{$file} = $o.' => (no change' if $opt{verbose} > 1;
+              }
+            else
+              {
+                if (utime( $mtime, $mtime, $_ ))
+                  {
+                    $file_msg{$file} = $o.' => '.$n;
+                  }
+                else
+                  {
+                    perror( $file );
+                  }
+              }
+          } @_;
+    }
+  else
+    {
+      utime( $mtime, $mtime, @_ );
+    }
+}
+
+sub print_file_msgs
+{
+  my ($relative, $topdir) = @_;
+  if    (!defined( $topdir ))  { $topdir  = ''  }
+  elsif ($topdir eq '.')       { $topdir  = ''  }
+  else                         { $topdir .= '/' }
+
+  my $prefix = 1 + length( $gitdir );
+  for my $file (sort keys %file_msg)
+    {
+      my $short = ($relative
+                   ? ($file eq $gitdir
+                      ? '.'
+                      : substr( $file, $prefix))
+                   : $topdir . $file);
+      printf( "%-42s  %s\n", $file_msg{$file}, $short );
+    }
+}
+
+
 sub parse_options
 {
   my $help = -1;
@@ -139,24 +245,44 @@ sub parse_options
   $parser->configure (qw(pass_through no_ignore_case no_auto_abbrev no_bundling));
   my $succ = $parser->getoptions
     ( 'h|?|help+'        => \$help,
-      'C=s'              => sub { push @git_cmd, '-C', $_[1] },
-      'emacs'            => \$emacs_repo,
-      'A|author'         => \$author_time,
+      'emacs'            => \$opt{emacs_repo},
+      'A|author'         => \$opt{author_time},
+      'v|verbose+'       => \$opt{verbose},
     );
 
-  pod2usage (-exitstatus => 1, -verbose => 0)     unless $succ;
-  pod2usage (-exitstatus => 0, -verbose => $help) if $help >= 0;
+  #pod2usage (-exitstatus => 1, -verbose => 0)     unless $succ;
+  #pod2usage (-exitstatus => 0, -verbose => $help) if $help >= 0;
+
+  $emacscr_re = qr/(?:add|update|run|set-).*copyright|copyright.year|arch.tag|gplv3/i
+    if $opt{emacs_repo};
 }
 
 sub main
 {
-  parse_options (\@_);
-  push @ARGV, (qw(@ -- .)) unless @_;
-  # Use manual option for now.
-  #$emacs_repo = 1 if git (qw(ls-tree --full-tree --name-status -r @ -- src/emacs.c));
+  parse_options( \@_ );
+  unshift( @_, '.' ) unless @_ && -d $_[0];
 
-  my $tbl = git_log_data (@_);
-  set_mtimes ($tbl);
+  my $dir = shift;
+  return perror( $dir ) unless chdir( $dir );
+  my %info = git_worktree_info() or return;
+
+  if ($info{bare})
+    {
+      $gitdir = $info{worktree};
+      my $mtime = git( qw(log -n1 --all --format=%ct) );
+      my @node;
+      walk_dirtree( $gitdir, sub { push @node, @_ } );
+      chmtime( $mtime, @node );
+    }
+  else
+    {
+      my $tbl = git_log_data( @_ ) or next;
+      while (my ($file, $mtime) = each %$tbl)
+        {
+          chmtime( $mtime, $file );
+        }
+    }
+  print_file_msgs( $info{bare}, $dir ) if %file_msg;
 }
 
 main (@ARGV);
