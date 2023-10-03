@@ -1,0 +1,17 @@
+#!/bin/sh
+
+for repo in "$@"; do
+    test $# -gt 1 && echo "$repo:"
+    bare=$(git -C "$repo" config --bool --local --get core.bare)
+    test $? -eq 0 || continue
+
+    case $bare in
+        true | false ) : ;;
+        '' ) continue ;;
+    esac
+
+    git -C "$repo" pack-refs --all
+    git -C "$repo" repack -a -d -k
+    $bare && git restore-commit-mtime "$repo"
+    test $# -gt 1 && echo
+done
