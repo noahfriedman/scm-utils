@@ -1,5 +1,4 @@
 #!/bin/sh
-# $Id: git-mclone,v 1.10 2019/08/21 20:03:57 friedman Exp $
 
 case $1 in
     --bare        ) mode=$1 ; shift  ;;
@@ -29,9 +28,6 @@ for url in "$@"; do
             $GITPROG -C "$localdir" lfs fetch --all
             rmdir -p "$localdir/lfs/tmp" 2> /dev/null
         fi
-
-        # Not needed for archival and can be generated later.
-        git -C "$localdir" config --local --type bool repack.writeBitmaps false
 
         tm=`$GITPROG -C "$localdir" log -n1 --format=tformat:%ci`
         find -- "$localdir" -exec touch -d "$tm" '{}' +
