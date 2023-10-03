@@ -34,6 +34,10 @@ use POSIX qw(:sys_wait_h strftime getcwd);
 use Getopt::Long;
 #use Pod::Usage;
 
+use lib "$ENV{HOME}/lib/perl";
+use NF::PrintObject qw(:all);
+$object_pp_option{verbose} = 3;
+
 (my $progname = $0) =~ s=^.*/==;
 
 my %opt = ( emacs_repo  => 0,
@@ -188,8 +192,8 @@ sub chmtime
       my $fmt = '%Y-%m-%d %H:%M:%S';
       my $n = strftime( $fmt, localtime( $mtime ));
 
-      map { my @st = lstat $_;
-            my $otime = $st[9] ;
+      map { my @st = lstat( $_ );
+            my $otime = $st[9] ;  # 9==st_mtime
             my $o = strftime( $fmt, localtime( $st[9] ));
 
             (my $file = $_) =~ s=^\./==;
@@ -271,7 +275,12 @@ sub main
       $gitdir = $info{worktree};
       my $mtime = git( qw(log -n1 --all --format=%ct) );
       my @node;
-      walk_dirtree( $gitdir, sub { push @node, @_ } );
+      my $fn = sub { my @st = stat( $_[0] );
+                     # Don't touch files older than our
+                     # computed mtime in bare repos.
+                     push( @node, $_[0] ) unless $st[9] < $mtime;
+                   };
+      walk_dirtree( $gitdir, $fn );
       chmtime( $mtime, @node );
     }
   else
