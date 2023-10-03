@@ -276,7 +276,7 @@ sub main
     }
   else
     {
-      my $tbl = git_log_data( @_ ) or next;
+      my $tbl = git_log_data( @_ ) or return;
       while (my ($file, $mtime) = each %$tbl)
         {
           chmtime( $mtime, $file );
