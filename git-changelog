@@ -42,7 +42,8 @@ my %change_label =
 
 my @git_cmd = ($ENV{GITPROG} || "git");
 
-my $log_format = join ("%x00", qw( chash:%h   thash:%t     sref:%S
+my $log_format = join ("%x00", qw( chash:%h   thash:%t
+                                    sref:%S    dref:%d
                                    aname:%aN  amail:%aE   adate:%aI
                                    cname:%cN  cmail:%cE   cdate:%cI
                                     desc:%B    note:%N  filelog:));
@@ -313,6 +314,8 @@ sub parse_options
   my $help = -1;
   local *ARGV = \@{$_[0]}; # modify our local arglist, not real ARGV.
 
+  my $show_refs = 0;
+
   my $parser = Getopt::Long::Parser->new;
   $parser->configure (qw(pass_through no_ignore_case no_auto_abbrev no_bundling));
   my $succ = $parser->getoptions
@@ -320,18 +323,24 @@ sub parse_options
       'C=s'              => sub { push @git_cmd, '-C', $_[1] },
       'fmt|format=s'     => \$template,
       'F|no-filelog'     => sub { delq( "--name-status", \@log_cmd ) },
+      'refs'             => \$show_refs,
     );
 
   pod2usage (-exitstatus => 1, -verbose => 0)     unless $succ;
   pod2usage (-exitstatus => 0, -verbose => $help) if $help >= 0;
 
-  for my $arg (@ARGV)
+  unless ($show_refs)
     {
-      last if $arg eq '--';
-      next unless $arg =~ /^--(?:all|reflog|branches|tags|remotes)(?:=|$)/;
-      $template =~ s=\(thash\)=(thash)  %(sref)=;
-      last;
+      # If any of these options were given, show refs anyway.
+      for my $arg (@ARGV)
+        {
+          last if $arg eq '--';
+          next unless $arg =~ /^--(?:all|reflog|branches|tags|remotes)(?:=|$)/;
+          $show_refs = 1;
+          last;
+        }
     }
+  $template =~ s=\(thash\)=(thash) %(dref)= if $show_refs;
 }
 
 sub main
