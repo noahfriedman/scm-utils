@@ -199,7 +199,7 @@ sub chmtime
             (my $file = $_) =~ s=^\./==;
             if ($otime == $mtime)
               {
-                $file_msg{$file} = $o.' => (no change' if $opt{verbose} > 1;
+                $file_msg{$file} = $o.' => (no change)' if $opt{verbose} > 1;
               }
             else
               {
