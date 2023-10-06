@@ -13,14 +13,13 @@
 
 # Code:
 
-# Removes last element from ARRAYNAME.  Optional arg N removes last N.
-apop() { eval "$1=(\"\${$1[@]:0:\${#$1[@]}-${2-1}}\")"; }
+: ${GITPROG:=git}
 
 main()
 {
     arg=( "$@" )
     dstdir=${arg[-1]}
-    apop arg
+    unset arg[-1]
 
     if [[ -d $dstdir ]]; then
         srcdir=$dstdir
@@ -28,17 +27,17 @@ main()
         dstdir=${dstdir%.git}
     else
         srcdir=${arg[-1]}
-        apop arg
+        unset arg[-1]
     fi
 
     emptydir=${XDG_RUNTIME_DIR-${TMPDIR-/tmp}}/empty.$$
     trap 'rmdir "$emptydir"' 0 1 2 3 15
     (umask 077; mkdir -p "$emptydir")
 
-    ${GITPROG-git} clone --shared --template "$emptydir" "${arg[@]}" -- "$srcdir" "$dstdir"
-    ${GITPROG-git} -C "$dstdir" branch   --unset-upstream
-    ${GITPROG-git} -C "$dstdir" config   --remove-section remote.origin
-    ${GITPROG-git} -C "$dstdir" restore-commit-mtime
+    $GITPROG clone --shared --template "$emptydir" "${arg[@]}" -- "$srcdir" "$dstdir"
+    $GITPROG -C "$dstdir" branch --unset-upstream
+    $GITPROG -C "$dstdir" config --unset remote.origin.url
+    $GITPROG -C "$dstdir" restore-commit-mtime
 }
 
 main "$@"
