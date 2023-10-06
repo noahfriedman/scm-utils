@@ -251,6 +251,7 @@ sub parse_options
     ( 'h|?|help+'        => \$help,
       'emacs'            => \$opt{emacs_repo},
       'A|author'         => \$opt{author_time},
+      'd|directories'    => \$opt{dirs},
       'v|verbose+'       => \$opt{verbose},
     );
 
@@ -270,9 +271,9 @@ sub main
   return perror( $dir ) unless chdir( $dir );
   my %info = git_worktree_info() or return;
 
+  $gitdir = $info{worktree};
   if ($info{bare})
     {
-      $gitdir = $info{worktree};
       my $mtime = git( qw(log -n1 --all --format=%ct) );
       my @node;
       my $fn = sub { my @st = stat( $_[0] );
@@ -286,6 +287,18 @@ sub main
   else
     {
       my $tbl = git_log_data( @_ ) or return;
+
+      if ($opt{dirs})
+        {
+          my %dirtbl;
+          while (my ($file, $mtime) = each %$tbl)
+            {
+              (my $dir = $file) =~ s=/[^/]*$==;
+              $dir = '.' if $dir eq $file;
+              $tbl->{$dir} = $mtime
+                unless exists $tbl->{$dir} && $tbl->{$dir} > $mtime;
+            }
+        }
       while (my ($file, $mtime) = each %$tbl)
         {
           chmtime( $mtime, $file );
