@@ -290,11 +290,12 @@ sub main
 
       if ($opt{dirs})
         {
-          my %dirtbl;
-          while (my ($file, $mtime) = each %$tbl)
+          # use keys() rather than each() here, because we're modifying $tbl.
+          for my $file (keys %$tbl)
             {
               (my $dir = $file) =~ s=/[^/]*$==;
               $dir = '.' if $dir eq $file;
+              my $mtime = $tbl->{$file};
               $tbl->{$dir} = $mtime
                 unless exists $tbl->{$dir} && $tbl->{$dir} > $mtime;
             }
