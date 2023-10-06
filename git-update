@@ -151,6 +151,7 @@ main()
                 revno_old=`git_revno`
                 git pull "${gitargs[@]}" "${xopts[@]}"
                 revno_new=`git_revno`
+                case $revno_new in $revno_old ) return 0 ;; esac
                 git restore-commit-mtime $revno_old..$revno_new
 
                 fastforward_refs
