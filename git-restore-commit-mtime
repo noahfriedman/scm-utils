@@ -30,13 +30,19 @@
 use strict;
 use warnings qw(all);
 
-use POSIX qw(:sys_wait_h strftime getcwd);
+use POSIX qw(:sys_wait_h strftime);
+use Fcntl qw(:mode);
+
 use Getopt::Long;
 #use Pod::Usage;
 
-use lib "$ENV{HOME}/lib/perl";
-use NF::PrintObject qw(:all);
-$object_pp_option{verbose} = 3;
+# Offsets into the list returned by stat() and lstat() that we use
+use constant
+  {
+    ST_MODE    =>  2,	# file type and perms
+    ST_ATIME   =>  8,	# last access time in seconds since the epoch
+    ST_MTIME   =>  9,	# last modify time in seconds since the epoch
+  };
 
 (my $progname = $0) =~ s=^.*/==;
 
@@ -48,7 +54,7 @@ my @git_cmd = ($ENV{GITPROG} || "git");
 
 our $emacscr_re;
 our $cmd_exitstat = 0;
-our $gitdir;
+our $gitdir = '.';
 
 sub perror
 {
@@ -118,9 +124,6 @@ sub git_log_data
 {
   unshift( @_, '@' )        if !@_ || $_[0] !~ m=\@|.+?\.\..+=;
   splice(  @_, 1, 0, '--' ) if  @_ < 2 || $_[1] ne '--';
-  # n.b. adding paths to get commits with files slows this down considerably.
-  # We skip the file-less commits below anyway.
-  #push(   @_, "." )        if $_[$#_] eq '--';
 
   my $format = $opt{author_time} ? "%at" : "%ct";
   $format .= "\001%s\001" if $opt{emacs_repo};
@@ -184,6 +187,12 @@ sub min { my $m = shift; map { $m = $_ if $_ < $m } @_; return $m }
 
 my %file_msg;
 
+# Do not modify mtime on a file if it's already set to that time.
+# This avoids changing the atime or ctime unnecessarily.
+#
+# Perl cannot presently change the mtime of symlinks (i.e. no
+# lutimes() interface), so they are skipped entirely.
+# A really inefficient solution would be to call out to touch(1).
 sub chmtime
 {
   my $mtime = shift;
@@ -193,31 +202,36 @@ sub chmtime
       my $n = strftime( $fmt, localtime( $mtime ));
 
       map { my @st = lstat( $_ );
-            my $otime = $st[9] ;  # 9==st_mtime
-            my $o = strftime( $fmt, localtime( $st[9] ));
-
+            my $otime = $st[ST_MTIME] ;
+            my $o = strftime( $fmt, localtime( $otime ));
             (my $file = $_) =~ s=^\./==;
-            if ($otime == $mtime)
+
+            if ((S_ISLNK( $st[ST_MODE] )))
+              {
+                $file_msg{$file} = $o.' => (ignoring symlink)'
+                  if $opt{verbose} > 1;
+              }
+            elsif ($otime == $mtime)
               {
                 $file_msg{$file} = $o.' => (no change)' if $opt{verbose} > 1;
               }
+            elsif (utime( $st[ST_ATIME], $mtime, $_ ))
+              {
+                $file_msg{$file} = $o.' => '.$n;
+              }
             else
               {
-                if (utime( $mtime, $mtime, $_ ))
-                  {
-                    $file_msg{$file} = $o.' => '.$n;
-                  }
-                else
-                  {
-                    perror( $file );
-                  }
+                perror( $file );
               }
           } @_;
-    }
+    } # verbose
   else
     {
-      utime( $mtime, $mtime, @_ );
-    }
+      map { my @st = lstat( $_ );
+            utime( $st[ST_ATIME], $mtime, $_ )
+              unless S_ISLNK( $st[ST_MODE] ) || $st[ST_MTIME] == $mtime;
+          } @_;
+    } #!verbose
 }
 
 sub print_file_msgs
@@ -271,9 +285,10 @@ sub main
   return perror( $dir ) unless chdir( $dir );
   my %info = git_worktree_info() or return;
 
-  $gitdir = $info{worktree};
   if ($info{bare})
     {
+      local $gitdir = $info{worktree};
+
       my $mtime = git( qw(log -n1 --all --format=%ct) );
       my @node;
       my $fn = sub { my @st = stat( $_[0] );
