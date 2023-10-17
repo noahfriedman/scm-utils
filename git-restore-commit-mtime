@@ -237,17 +237,20 @@ sub chmtime
 sub print_file_msgs
 {
   my ($relative, $topdir) = @_;
-  if    (!defined( $topdir ))  { $topdir  = ''  }
+  my $prefix_dir = $topdir;
+
+  if    ($relative)            { $prefix_dir = $gitdir }
+  elsif (!defined( $topdir ))  { $topdir  = ''  }
   elsif ($topdir eq '.')       { $topdir  = ''  }
   else                         { $topdir .= '/' }
 
-  my $prefix = 1 + length( $gitdir );
+  my $prefix = 1 + length( $prefix_dir );
   for my $file (sort keys %file_msg)
     {
       my $short = ($relative
-                   ? ($file eq $gitdir
-                      ? '.'
-                      : substr( $file, $prefix))
+                   ? ($file eq $prefix_dir
+                      ? $topdir
+                      : $topdir.'/'.substr( $file, $prefix ))
                    : $topdir . $file);
       printf( "%-42s  %s\n", $file_msg{$file}, $short );
     }
@@ -287,7 +290,7 @@ sub main
 
   if ($info{bare})
     {
-      local $gitdir = $info{worktree};
+      $gitdir = $info{worktree};
 
       my $mtime = git( qw(log -n1 --all --format=%ct) );
       my @node;
