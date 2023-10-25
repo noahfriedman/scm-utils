@@ -1,0 +1,149 @@
+#!/usr/bin/env perl
+# git-with-format --- run git subcommand with named format template
+# Author: Noah Friedman <friedman@splode.com>
+# Created: 2023-10-24
+# Public domain
+
+# Commentary:
+# Code:
+
+use 5.10.0;
+use strict;
+use warnings qw(all);
+
+use Getopt::Long;
+#use Pod::Usage;
+
+my %opt = ( verbose     => 0,
+            format      => undef,
+          );
+my $GITPROG = $ENV{GITPROG} // 'git';
+
+sub _exec
+{
+  exec( { $GITPROG } $GITPROG, @_ ) || die "exec: $!\n";
+}
+
+sub cmd_out
+{
+  open( my $fh, "-|", @_ ) or die "exec: $_[0]: $!\n";
+  local $/ = wantarray ? $/ : undef;
+  return <$fh>;
+}
+
+sub git_query_format
+{
+  return cmd_out( $GITPROG, 'config', "withformat.$_[0]" );
+}
+
+sub get_format
+{
+  my $fmt = $_[0] // return;
+
+  # The pattern '((?<!%)(?>%%)*)' matches 2 or more sequential % chars.
+  # The first part is a 0-width assertion that there is not a % character,
+  # followed by a non-backtracking assertion that '%%' appears 0 or more
+  # times. Thus, '%%n' will not be converted to a newline.
+  if ($fmt !~ /^t?format:/)
+    {
+      $fmt = git_query_format( $fmt );
+      unless ($fmt)
+        {
+          warn( "warning: $_[0]: undefined format\n" );
+          return;
+        }
+      $fmt =~ s/[ \t\n]+//g;  # strip whitespace
+      $fmt =~ s/((?<!%)(?>%%)*)%_/$1 /g;
+      $fmt =~ s/((?<!%)(?>%%)*)%t/$1\t/g;
+    }
+  # Do newline conversion even for immediate formats, since not every git
+  # command supports them natively.
+  $fmt =~ s/((?<!%)(?>%%)*)%n/$1\n/g;
+  return $fmt;
+}
+
+sub parse_options
+{
+  my $help = -1;
+  local *ARGV = \@{$_[0]}; # modify our local arglist, not real ARGV.
+
+  my $parser = Getopt::Long::Parser->new;
+  $parser->configure (qw( no_ignore_case
+                          no_auto_abbrev
+                          no_bundling
+                             pass_through
+                             require_order ));
+  my $succ = $parser->getoptions
+    ( 'h|?|help+'        => \$help,
+      'd|debug+'         => \$opt{debug},
+
+      'f|fmt|format=s'   => \$opt{format},
+    );
+
+  #pod2usage (-exitstatus => 1, -verbose => 0)     unless $succ;
+  #pod2usage (-exitstatus => 0, -verbose => $help) if $help >= 0;
+}
+
+sub main
+{
+  parse_options (\@_);
+
+  my $fmt = get_format( $opt{format} ) if $opt{format};
+  if ($fmt)
+    {
+      # Insert format after all of the leading non-option tokens.
+      for (my $i = 0; $i < @_; $i++)
+        {
+          next unless $_[$i] =~ /^-/;
+          splice( @_, $i, 0, "--format=$fmt" );
+          undef $fmt;
+          last;
+        }
+      # As a last resort, put it on the end of the args
+      push @_, "--format=$fmt" if defined $fmt;
+    }
+
+  if ($opt{debug})
+    {
+      my @a = map { s/([\\"])/\\$1/g; "\"$_\"" } ($GITPROG, @_);
+      print( STDERR "@a\n" );
+    }
+
+  _exec( @_ ) || exit( 1 );
+}
+
+main( @ARGV );
+
+__END__
+
+=head1 NAME
+
+ git-with-format --- run git subcommand with named format template
+
+=head1 SYNOPSIS
+
+ git with-format --format=I<name> other-git-command --options ...
+
+	{-?|-h|--help}
+	{-f|--format  NAME|FORMAT}
+
+ The -h option may be repeated up to 3 times for increased verbosity.
+
+=head1 OPTIONS
+
+=over 8
+
+=item B<-h>, B<--help>
+
+Usage information.
+May be repeated 1-3 times for more verbosity.
+
+=item B<-f>, B<--format=>I<NAME|FORMAT>
+
+=back
+
+=head1 DESCRIPTION
+
+ This retrieves format entries from the C<withformat> section of your git config.
+
+=cut
