@@ -1,0 +1,28 @@
+#!/bin/sh
+# Public domain
+
+revlist()
+{
+    rlog -b -N "$@" | sed -ne '/^revision /s///p' | tac
+}
+
+rdiff()
+{
+    rcsdiff ${RCSDIFF_FLAGS- -Bbu} -r$1 -r$2 "$3"
+}
+
+main()
+{
+    for file in "$@"; do
+        set x `revlist $file`
+        shift
+        while [ $# -gt 1 ]; do
+            rdiff $1 $2 "$file"
+            shift
+        done
+    done
+}
+
+main "$@"
+
+# eof
