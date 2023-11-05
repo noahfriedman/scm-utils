@@ -1,0 +1,25 @@
+#!/bin/sh
+
+timestamps()
+{
+    rlog -N -r "$@" |
+        sed -n \
+            -e '/^Working file: \(.*\)/{s//\1/;h;}' \
+            -e '/date: \([0-9\/-]* [0-9:]*\)[^;]*;.*/{s//\1/;G;s/\n/	/p;}'
+}
+
+
+main()
+{
+    timestamps "$@" |
+        while read date time file; do
+            if [ -f "$file,v" ]; then
+                echo "$date $time $file,v"
+                touch -d "$date $time UTC" "$file,v"
+            fi
+        done
+}
+
+main "$@"
+
+# eof
