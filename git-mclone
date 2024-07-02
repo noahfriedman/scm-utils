@@ -29,7 +29,7 @@ for url in "$@"; do
             rmdir -p "$localdir/lfs/tmp" 2> /dev/null
         fi
 
-        tm=`$GITPROG -C "$localdir" log -n1 --format=tformat:%ci`
+        tm=`$GITPROG -C "$localdir" log -n1 --all --format=tformat:%ci`
         find -- "$localdir" -exec touch -d "$tm" '{}' +
     fi
     echo
