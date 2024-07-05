@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+
+firstprog()
+{
+    for prog in "$@"; do
+        type "$prog" > /dev/null 2>&1 || continue
+        echo "$prog"
+        return 0
+    done
+    return 1
+}
+
+gnup()
+{
+    case `"$1" --version` in
+        *GNU* ) return 0 ;;
+    esac
+    return 1
+}
+
+main()
+{
+    if [ $# -ne 7 ]; then
+        echo "Usage: ${0##*/} [path] [a_file] [a_sha1] [a_mode] [b_file] [b_sha1] [b_mode]" 1>&2
+        exit 1
+    fi
+
+    path=$1
+    a_file=$2    a_sha1=$3    a_mode=$4
+    b_file=$5    b_sha1=$6    b_mode=$7
+
+    : ${EXTDIFF_PROGRAM:=`firstprog gdiff diff`}
+    : ${EXTDIFF_OPTIONS:=${GIT_DIFF_OPTS:-'-u'}}
+
+    gdiff_opts=()
+    if gnup "$EXTDIFF_PROGRAM"; then
+        gdiff_opts=(
+            --label "a/$path"
+            --label "b/$path"
+        )
+    fi
+
+    ${EXTDIFF_PROGRAM} "${gdiff_opts[@]}" ${EXTDIFF_OPTIONS} "$a_file" "$b_file"
+}
+
+main "$@"
+
+: # Git will complain if external diff returns nonzero
+
+# eof
