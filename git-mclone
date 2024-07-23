@@ -1,38 +1,56 @@
 #!/bin/sh
 
-case $1 in
-    --bare        ) mode=$1 ; shift  ;;
-    --mirror      ) mode=$1 ; shift  ;;
-    --shared      ) mode=$1 ; shift  ;;
-    --no-checkout ) mode=$1 ; shift  ;;
-    *             ) mode=--recursive ;;
-esac
-
-emptydir=${XDG_RUNTIME_DIR-${TMPDIR-/tmp}}/empty.$$
-trap 'rm -rf "$emptydir"' 0 1 2 3 15
-(umask 077; mkdir -p "$emptydir")
-
-: ${GITPROG:=git}
-
-for url in "$@"; do
-    localdir=${url##*/}
-    localdir=${localdir%.git}.git  # make sure it ends in .git
-
-    echo "** $url"
-    $GITPROG clone $mode --template "$emptydir" -- "$url" "$localdir" || continue
-
-    if [ -e "$localdir/.git" ]; then
-        $GITPROG -C "$localdir" restore-commit-mtime
-    else # bare repo
-        if type git-lfs > /dev/null 2>&1; then
-            $GITPROG -C "$localdir" lfs fetch --all
-            rmdir -p "$localdir/lfs/tmp" 2> /dev/null
+getprog()
+{
+    for prog in "$@"; do
+        if  type "$prog" > /dev/null 2>&1; then
+            echo "$prog"
+            return 0
         fi
+    done
+    return 1
+}
 
-        tm=`$GITPROG -C "$localdir" log -n1 --all --format=tformat:%ci`
-        find -- "$localdir" -exec touch -d "$tm" '{}' +
-    fi
-    echo
-done
+main()
+{
+    case $1 in
+        --bare        ) mode=$1 ; shift  ;;
+        --mirror      ) mode=$1 ; shift  ;;
+        --shared      ) mode=$1 ; shift  ;;
+        --no-checkout ) mode=$1 ; shift  ;;
+        *             ) mode=--recursive ;;
+    esac
+
+    emptydir=${XDG_RUNTIME_DIR-${TMPDIR-/tmp}}/empty.$$
+    trap 'rm -rf "$emptydir"' 0 1 2 3 15
+    (umask 077; mkdir -p "$emptydir")
+
+    : ${GITPROG:=git}
+    : ${FIND:=` getprog gfind  find  || echo find`}
+    : ${TOUCH:=`getprog gtouch touch || echo touch`}
+
+    for url in "$@"; do
+        localdir=${url##*/}
+        localdir=${localdir%.git}.git  # make sure it ends in .git
+
+        echo "** $url"
+        $GITPROG clone $mode --template "$emptydir" -- "$url" "$localdir" || continue
+
+        if [ -e "$localdir/.git" ]; then
+            $GITPROG -C "$localdir" restore-commit-mtime
+        else # bare repo
+            if type git-lfs > /dev/null 2>&1; then
+                $GITPROG -C "$localdir" lfs fetch --all
+                rmdir -p "$localdir/lfs/tmp" 2> /dev/null
+            fi
+
+            tm=`$GITPROG -C "$localdir" log -n1 --all --format=tformat:%ci`
+            $FIND -- "$localdir" -exec $TOUCH -d "$tm" '{}' +
+        fi
+        echo
+    done
+}
+
+main "$@"
 
 # eof
