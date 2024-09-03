@@ -331,15 +331,26 @@ sub parse_options
 
   unless ($show_refs)
     {
-      # If any of these options were given, show refs anyway.
-      for my $arg (@ARGV)
+      my $decorate = ChangeLog::__git( qw(config get log.initialDecorationSet) );
+      $decorate =~ s/^\s*(.*?)\s*$/$1/;
+
+      if (lc( $decorate ) eq 'all')
         {
-          last if $arg eq '--';
-          next unless $arg =~ /^--(?:all|reflog|branches|tags|remotes)(?:=|$)/;
           $show_refs = 1;
-          last;
+        }
+      else
+        {
+          # If any of these options were given, show refs anyway.
+          for my $arg (@ARGV)
+            {
+              last if $arg eq '--';
+              next unless $arg =~ /^--(?:all|reflog|branches|tags|remotes)(?:=|$)/;
+              $show_refs = 1;
+              last;
+            }
         }
     }
+
   $template =~ s=\(thash\)=(thash) %(dref)= if $show_refs;
 }
 
