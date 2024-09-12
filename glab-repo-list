@@ -1,0 +1,238 @@
+#!/usr/bin/env bash
+# glab-repo-list --- get lists of groups and projects from gitlab servers
+# Author: Noah Friedman <friedman@splode.com>
+# Created: 2024-08-07
+# Public domain
+
+# Commentary:
+
+# This uses the `glab' command as a front end to retrieve json data from
+# gitlab servers.  This gitlab server can be specified via the environment
+# variable `GLAB_HOST'.  You will need to set up any required auth tokens
+# beforehand.
+
+# Code:
+
+declare -A jq_fns=(
+    # insert string (e.g, "archive" in pos position of directory hier
+    [inspath]='def inspath(str;pos):
+        .
+        | split("/")
+        | [.[:pos], str, .[pos:]]
+        | flatten
+        | join("/");'
+
+    # Convert zulu iso time str in . to local time
+    [ltime]='def ltime(fmt):
+        .
+        | sub("\\.[0-9]+Z";"Z")
+        | fromdate
+        | strflocaltime(fmt // "%F %R");'
+
+    # Convert array into a sequence of objects, or just return object
+    [objseq]='def objseq:
+        if (type == "array")
+        then .[]
+        else .
+        end;'
+
+    # right-justify arg to 16 chars
+    [rj]='def rj(m):
+        ( (.  | tostring) + "")  as $s
+        | ($s | length)          as $w
+        | (" " * ((m // 16) - $w)) + $s;'
+)
+
+glab_opt=(
+    --hostname   ${GLAB_HOST:=gitlab.freedesktop.org}
+    --method     GET
+
+    --field      all_available=true
+    --field      simple=false
+    #--field     top_level_only=true
+
+    --field      per_page=100
+    --paginate
+
+    #--include
+    #--silent
+)
+
+glab_api()
+{
+    ${GLAB:=glab} api "${glab_opt[@]}" "$@"
+}
+
+glab_groups()
+{
+    for arg in "$@"; do
+        case $arg in
+            /*/ )
+                arg=${arg#/} # strip leading /
+                arg=${arg%/} # strip trailing /
+                glab_api groups --field search="$arg"
+                ;;
+            * )
+                glab_api groups/$arg
+                ;;
+        esac
+    done
+}
+
+glab_projects()
+{
+    for group in "$@"; do
+        case $group in
+            */* ) group=${group//\//%2F} ;;
+        esac
+        glab_api groups/$group/projects
+    done
+}
+
+######
+##
+######
+
+get_groups()
+{
+    glab_groups "$@" | jq -r "${jq_fns[objseq]}"'objseq | .full_path'
+}
+
+get_projects()
+{
+    glab_projects "$@" | jq -r '.[].path_with_namespace'
+
+}
+
+get_group_projects()
+{
+    get_projects $(get_groups "$@")
+}
+
+######
+##
+######
+
+fmt_projects()
+{
+    jq -r "${jq_fns[*]}"'
+           objseq
+            | if .empty_repo then empty else . end
+            | [ ( .updated_at | ltime("%F  %R") ),
+                ( if .archived
+                      then "A"
+                      else "-"
+                  end
+                ),
+                .http_url_to_repo
+              ]
+            | join("\t")
+          '               |
+        sort -k3,3r -k4,4 |
+        column -t -s'	' -o'	'
+}
+
+fmt_projects_lpath()
+{
+    jq -r "${jq_fns[*]}"'
+           objseq
+            | if .empty_repo then empty else . end
+            | [ ( .updated_at | ltime("%F  %R") ),
+                ( if .archived then
+                      .path_with_namespace | inspath("archived";1)
+                  else
+                      .path_with_namespace
+                  end
+                  | . + ".git"
+                ),
+                .http_url_to_repo
+              ]
+            | join("\t")
+          '        |
+        sort -k3,3 |
+        column -t -s'	' -o'	'
+}
+
+######
+##
+######
+
+list_mesa()
+{
+    glab_projects mesa | fmt_projects
+}
+
+
+list_mesa_lpath()
+{
+    glab_projects mesa | fmt_projects_lpath
+}
+
+list_xorg()
+{
+    glab_projects xorg $(get_groups /xorg//) | fmt_projects
+}
+
+list_xorg_lpath()
+{
+    glab_projects xorg $(get_groups /xorg//) | fmt_projects_lpath
+}
+
+######
+##
+######
+
+commands=(
+    glab_api
+    glab_groups
+    glab_projects
+
+    get_groups
+    get_projects
+    get_group_projects
+
+    fmt_projects
+    fmt_projects_lpath
+
+    list_mesa
+    list_mesa_lpath
+
+    list_xorg
+    list_xorg_lpath
+)
+
+memberp()
+{
+    local elt=$1
+    shift
+
+    while [ $# -gt 0 ]; do
+        case $elt in $1 ) return 0 ;; esac
+        shift
+    done
+    return 1
+}
+
+main()
+{
+    case $# in
+        0 ) set list_xorg ;;
+    esac
+
+    cmd=${1//-/_}
+    shift
+
+    if memberp $cmd "${commands[@]}"; then
+        "$cmd" "$@"
+    else
+        echo "Valid commands:"
+        for elt in "${commands[@]}"; do
+            echo "	$elt"
+        done
+        exit 1
+    fi
+}
+
+main "$@"
+
+# eof
