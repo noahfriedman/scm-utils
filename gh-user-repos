@@ -1,0 +1,138 @@
+#!/usr/bin/env bash
+
+gh_user_default=noahfriedman
+
+gh_opt=(
+    --header  "Accept: application/vnd.github+json"
+    --header  "X-GitHub-Api-Version: 2022-11-28"
+
+    --method  GET
+    --field   per_page=100
+    --paginate
+
+    #--verbose
+    #--include
+)
+
+gh_api()
+{
+    ${GH:=gh} api "${gh_opt[@]}" "$@"
+}
+
+gh_repos()
+{
+    gh_api "/users/${1:-$gh_user_default}/repos"
+}
+
+######
+##
+######
+
+declare -A jq_fns=(
+    # insert string (e.g, "archive" in pos position of directory hier
+    [inspath]='def inspath(str;pos):
+        .
+        | split("/")
+        | [.[:pos], str, .[pos:]]
+        | flatten
+        | join("/");'
+
+    # Convert zulu iso time str in . to local time
+    [ltime]='def ltime(fmt):
+        .
+        | sub("\\.[0-9]+Z";"Z")
+        | fromdate
+        | strflocaltime(fmt // "%F %R");'
+
+    # Convert array into a sequence of objects, or just return object
+    [objseq]='def objseq:
+        if (type == "array")
+        then .[]
+        else .
+        end;'
+
+    # right-justify arg to 16 chars
+    [rj]='def rj(m):
+        ( (.  | tostring) + "")  as $s
+        | ($s | length)          as $w
+        | (" " * ((m // 16) - $w)) + $s;'
+)
+
+fmt_repos()
+{
+    jq -r "${jq_fns[*]}"'
+           objseq
+            #| if .empty_repo then empty else . end
+            | [ ( .updated_at | ltime("%F  %R") ),
+                ( if   .archived    then "A"
+                  elif .empty_repo  then "E"
+                  elif .fork        then "F"
+                  elif .mirror_url  then "M"
+                  elif .is_template then "T"
+                  else                   "-"
+                  end
+                ),
+                ( ( .size | tostring ) + "K" | rj(8) ),
+                .clone_url
+              ]
+            | join("\t")
+          '
+}
+
+######
+##
+######
+
+repos()
+{
+    gh_repos "$@" | fmt_repos
+}
+
+######
+##
+######
+
+commands=(
+    gh_api
+    gh_repos
+
+    fmt_repos
+
+    repos
+)
+
+memberp()
+{
+    local elt=$1
+    shift
+
+    while [ $# -gt 0 ]; do
+        case $elt in $1 ) return 0 ;; esac
+        shift
+    done
+    return 1
+}
+
+main()
+{
+    case $# in
+        0 ) set list_xorg ;;
+    esac
+
+    cmd=${1//-/_}
+    shift
+
+    if memberp $cmd "${commands[@]}"; then
+        "$cmd" "$@"
+    else
+        echo "Valid commands:"
+        for elt in "${commands[@]}"; do
+            echo "	$elt"
+        done
+        exit 1
+    fi
+}
+
+main "$@"
+
+# eof
