@@ -157,25 +157,38 @@ fmt_projects_lpath()
 ##
 ######
 
+list_projects()
+{
+    glab_projects "$@" | fmt_projects
+}
+
+list_projects_lpath()
+{
+    glab_projects "$@" | fmt_projects_lpath
+}
+
+
+
 list_mesa()
 {
-    glab_projects mesa | fmt_projects
+    list_projects mesa
 }
 
 
 list_mesa_lpath()
 {
-    glab_projects mesa | fmt_projects_lpath
+    list_projects_lpath mesa
 }
+
 
 list_xorg()
 {
-    glab_projects xorg $(get_groups /xorg//) | fmt_projects
+    list_projects xorg $(get_groups /xorg//)
 }
 
 list_xorg_lpath()
 {
-    glab_projects xorg $(get_groups /xorg//) | fmt_projects_lpath
+    list_projects_lpath xorg $(get_groups /xorg//)
 }
 
 ######
@@ -193,6 +206,9 @@ commands=(
 
     fmt_projects
     fmt_projects_lpath
+
+    list_projects
+    list_projects_lpath
 
     list_mesa
     list_mesa_lpath
