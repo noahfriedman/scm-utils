@@ -42,7 +42,7 @@ my %change_label =
 
 my @git_cmd = ($ENV{GITPROG} || "git");
 
-my $log_format = join ("%x00", qw( chash:%h   thash:%t
+my $log_format = join ("%x00", qw( chash:%h   thash:%t    phash:%p
                                     sref:%S    dref:%d
                                    aname:%aN  amail:%aE   adate:%aI
                                    cname:%cN  cmail:%cE   cdate:%cI
@@ -53,8 +53,6 @@ my $log_format = join ("%x00", qw( chash:%h   thash:%t
 my @log_cmd = ( "log",
                 "--single-worktree",
                 "--pretty=format:$log_format%x00",
-                "--name-status",
-                "--no-merges",
                 "--no-color",
                 "-z", );
 
@@ -68,7 +66,9 @@ sub __cmd_out
 {
   open( my $fh, '-|', @_ ) or die "exec: $_[0]: $!\n";
   local $/ = wantarray ? $/ : undef;
-  return <$fh>;
+  local $_ = <$fh>;
+  close( $fh );  # calls wait to reap child and collect $?
+  return $_;
 }
 
 sub __git { return __cmd_out (@git_cmd, @_) }
@@ -300,43 +300,44 @@ use warnings qw(all);
 use Getopt::Long;
 use Pod::Usage;
 
-sub delq
-{
-  my ($elt, $list) = @_;
-  my $i = 0;
-
-  while ($i <= $#$list)
-    { splice (@$list, --$i, 1) if ($list->[$i++] || '') eq $elt }
-}
+my %opt =
+  ( filelog => 1,
+    merges  => 1,
+    refs    => 0,
+    C_arg   => undef,
+  );
 
 sub parse_options
 {
   my $help = -1;
   local *ARGV = \@{$_[0]}; # modify our local arglist, not real ARGV.
 
-  my $show_refs = 0;
-
   my $parser = Getopt::Long::Parser->new;
   $parser->configure (qw(pass_through no_ignore_case no_auto_abbrev no_bundling));
   my $succ = $parser->getoptions
     ( 'h|?|help+'        => \$help,
-      'C=s'              => sub { push @git_cmd, '-C', $_[1] },
+      'C=s'              => \$opt{C_arg},
       'fmt|format=s'     => \$template,
-      'F|no-filelog'     => sub { delq( "--name-status", \@log_cmd ) },
-      'refs'             => \$show_refs,
+      'F|no-filelog'     => sub { $opt{filelog} = 0 },
+      'M|no-merges'      => sub { $opt{merges}  = 0 },
+      'refs'             => \$opt{refs},
     );
 
   pod2usage (-exitstatus => 1, -verbose => 0)     unless $succ;
   pod2usage (-exitstatus => 0, -verbose => $help) if $help >= 0;
 
-  unless ($show_refs)
+  push @git_cmd, '-C', $opt{C_arg} if defined( $opt{C_arg} );
+  push @log_cmd, '--name-status'   if $opt{filelog};
+  push @log_cmd, '--no-merges' unless $opt{merges};
+
+  unless ($opt{refs})
     {
-      my $decorate = ChangeLog::__git( qw(config log.initialDecorationSet) );
+      my $decorate = ChangeLog::__git( qw(config get log.initialDecorationSet) );
       $decorate =~ s/^\s*(.*?)\s*$/$1/;
 
       if (lc( $decorate ) eq 'all')
         {
-          $show_refs = 1;
+          $opt{refs} = 1;
         }
       else
         {
@@ -345,13 +346,13 @@ sub parse_options
             {
               last if $arg eq '--';
               next unless $arg =~ /^--(?:all|reflog|branches|tags|remotes)(?:=|$)/;
-              $show_refs = 1;
+              $opt{refs} = 1;
               last;
             }
         }
     }
 
-  $template =~ s=\(thash\)=(thash) %(dref)= if $show_refs;
+  $template =~ s=\(thash\)=(thash) %(dref)= if $opt{refs};
 }
 
 sub main
