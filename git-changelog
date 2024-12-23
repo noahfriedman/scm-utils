@@ -332,7 +332,7 @@ sub parse_options
 
   unless ($opt{refs})
     {
-      my $decorate = ChangeLog::__git( qw(config get log.initialDecorationSet) );
+      my $decorate = ChangeLog::__git( qw(config --get log.initialDecorationSet) );
       $decorate =~ s/^\s*(.*?)\s*$/$1/;
 
       if (lc( $decorate ) eq 'all')
