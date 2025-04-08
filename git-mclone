@@ -1,56 +1,302 @@
-#!/bin/sh
+#!/usr/bin/env perl
+# git-mclone --- wrapper for git clone
+# Author: Noah Friedman <friedman@splode.com>
+# Created: 2017-05-19
+# Public domain
 
-getprog()
+# Commentary:
+# Code:
+
+use strict;
+use warnings qw(all);
+
+use POSIX qw(:sys_wait_h strftime);
+use Fcntl qw(:mode);
+use File::Find;
+
+use Getopt::Long;
+#use Pod::Usage;
+
+(my $progname = $0) =~ s=^.*/==;
+
+my %opt = ( mode      => 'recursive',
+            passthru  => undef,
+            template  => undef,
+            verbose   => 0,
+          );
+
+my @git_cmd = ($ENV{GITPROG} // "git");
+my $git_dir;
+my $git_lfs = undef;
+
+my $final_exitcode = 0;
+
+
+sub getprog
 {
-    for prog in "$@"; do
-        if  type "$prog" > /dev/null 2>&1; then
-            echo "$prog"
-            return 0
-        fi
-    done
-    return 1
+  my @path = map { if ($_ eq '') { '.' }
+                   else          { $_ }
+                 } split( /:/, $ENV{PATH} );
+
+  for my $prog (@_)
+    {
+      map { return $prog if -f "$_/$prog" && -x _ } @path;
+    }
+  return;
 }
 
-main()
+sub mktmpdir
 {
-    case $1 in
-        --bare        ) mode=$1 ; shift  ;;
-        --mirror      ) mode=$1 ; shift  ;;
-        --shared      ) mode=$1 ; shift  ;;
-        --no-checkout ) mode=$1 ; shift  ;;
-        *             ) mode=--recursive ;;
-    esac
+  my $topdir = $ENV{XDG_RUNTIME_DIR} || $ENV{TMPDIR} || '/tmp';
+  my $tmpdir = "$topdir/emptydir.$$";
 
-    emptydir=${XDG_RUNTIME_DIR-${TMPDIR-/tmp}}/empty.$$
-    trap 'rm -rf "$emptydir"' 0 1 2 3 15
-    (umask 077; mkdir -p "$emptydir")
-
-    : ${GITPROG:=git}
-    : ${FIND:=` getprog gfind  find  || echo find`}
-    : ${TOUCH:=`getprog gtouch touch || echo touch`}
-
-    for url in "$@"; do
-        localdir=${url##*/}
-        localdir=${localdir%.git}.git  # make sure it ends in .git
-
-        echo "** $url"
-        $GITPROG clone $mode --template "$emptydir" -- "$url" "$localdir" || continue
-
-        if [ -e "$localdir/.git" ]; then
-            $GITPROG -C "$localdir" restore-commit-mtime
-        else # bare repo
-            if type git-lfs > /dev/null 2>&1; then
-                $GITPROG -C "$localdir" lfs fetch --all
-                rmdir -p "$localdir/lfs/tmp" 2> /dev/null
-            fi
-
-            tm=`$GITPROG -C "$localdir" log -n1 --all --format=tformat:%ci`
-            $FIND -- "$localdir" -exec $TOUCH -d "$tm" '{}' +
-        fi
-        echo
-    done
+  my $saved_umask = umask( 077 );
+  mkdir( $tmpdir ) or die "mkdir: $tmpdir: $!\n";
+  umask( $saved_umask );
+  return $tmpdir;
 }
 
-main "$@"
+
+sub cmd
+{
+  if ($opt{verbose})
+    {
+      my @xq = xquote( @_ );
+      print STDERR "+ @xq\n";
+    }
+  system( { $_[0] } @_ );
+  return cmd_check_exit( $_[0] );
+}
+
+# Like `` but avoids shell exec/reparsing.
+sub cmd_out
+{
+  if ($opt{verbose} > 1)
+    {
+      my @xq = xquote( @_ );
+      print STDERR "+ @xq\n";
+    }
+  open( my $fh, "-|", @_ ) or die "exec: $_[0]: $!\n";
+  local $/ = wantarray ? $/ : undef;
+  my @data = map { s/\n$//s; $_ } <$fh>;
+  close( $fh ); # child will exit; perl calls waitpid implicitly
+  cmd_check_exit( $_[0] );
+  return wantarray? @data : $data[0];
+}
+
+sub cmd_check_exit
+{
+  return 1 unless $?;  # 1=success (boolean true)
+  $final_exitcode = 1;
+
+  my $msg;
+  if ($? == -1)
+    { $msg = "$!" }
+  elsif (WIFSIGNALED( $? ))
+    {
+      my $core = WCOREDUMP( $? ) ? ' (core dumped)' : '';
+      $msg = sprintf( "signal %d%s", WTERMSIG( $? ), $core );
+    }
+  else
+    { $msg = sprintf( "exit %d", WEXITSTATUS( $? )) }
+  print STDERR sprintf( "%s: %s: %s\n", $progname, $_[0], $msg );
+  return 0;  # 0=failure (boolean false)
+}
+
+sub xquote
+{
+  my @xq = @_;  # don't modify original
+  map { s/'/'\\''/sg;
+        s/^(.*)$/'$1'/s if /[][{}\(\)<>\'\"\!\?\|\$&\*;\s\\]/s;
+        $_ } @xq;
+}
+
+
+sub git_out { return cmd_out( @git_cmd, @_ ) }
+sub git     { return cmd    ( @git_cmd, @_ ) }
+
+sub git_config_get
+{
+  my $name = shift @_;
+  return git_out( 'config', @_, '--get', $name );
+}
+
+sub get_config_template_dir
+{
+  return $ENV{GIT_TEMPLATE_DIR} if defined $ENV{GIT_TEMPLATE_DIR};
+  my $tdir = git_config_get( 'init.templateDir' );
+  return $tdir if $tdir;
+  return;
+}
+
+sub git_clone
+{
+  my @clone_cmd = ('clone', '--'.$opt{mode} );
+  push( @clone_cmd, @{$opt{passthru}} )           if $opt{passthru};
+  push( @clone_cmd, '--template', $opt{template}) if $opt{template};
+  return git( @clone_cmd, @_ );
+}
+
+sub ST_MODE  { 2 }	# file type and perms
+sub ST_ATIME { 8 }	# last access time in seconds since the epoch
+sub ST_MTIME { 9 }	# last modify time in seconds since the epoch
+
+sub touch
+{
+  my ($file, $new_mtime, $st) = @_;
+
+  my $mode      = $st->[ST_MODE];
+  my $old_atime = $st->[ST_ATIME];
+  my $old_mtime = $st->[ST_MTIME];
+  my $info;
+
+  if ($opt{verbose} > 1)
+    {
+      my $strfmt = '%Y-%m-%d %H:%M:%S%z';
+      my $ostamp = strftime( $strfmt, localtime( $old_mtime ));
+      my $nstamp;
+
+      if (S_ISLNK( $mode ))
+        { $nstamp = '(ignoring symlink)' }
+      elsif ($new_mtime > $old_mtime)
+        { $nstamp = '(no change)' }
+      else
+        { $nstamp = strftime( $strfmt, localtime( $new_mtime )) }
+
+      printf( "%-42s  %s\n", $ostamp.' => '.$nstamp, $file );
+    }
+  return if S_ISLNK( $mode );
+  return if $new_mtime > $old_mtime;
+  utime( $old_atime, $new_mtime, $file );
+}
+
+sub fixup_repo
+{
+  my $repo_dir = shift;
+  my @C = ('-C', $repo_dir );
+
+  if (-e "$repo_dir/.git")
+    {
+      my @verbose = ('--verbose') x $opt{verbose};
+      return git( @C, 'restore-commit-mtime', @verbose );
+    }
+  else # bare repo
+    {
+      # Git 2.49 added the strange behavior of force-disabling --tags
+      # with --mirror (but not with --bare), and adding a local
+      # config option disabling it when fetching as well.
+      # Commit 0dab2468ee5bbfaa log provides a rational for this,
+      # but the --mirror case doesn't make sense to me.
+      git( @C, qw(config unset --local remote.origin.tagOpt) )
+        if $opt{mode} eq 'mirror';
+;
+      $git_lfs //= getprog( 'git-lfs' );
+      if ($git_lfs)
+        {
+          git( @C, qw(lfs fetch --all) );
+          # don't check for errors
+          rmdir( "$repo_dir/lfs/tmp" ) && rmdir( "$repo_dir/lfs" );
+        }
+
+      # n.b. could just use restore-commit-mtime here too,
+      # but bare repos shouldn't have many files anyway.
+      my $stamp  = git_out( @C, qw(log -n1 --all --format=tformat:%ct) );
+      my $pstamp = strftime( '%Y-%m-%d %H:%M:%S%Z', localtime( $stamp ));
+
+      local $File::Find::dont_use_nlink = 0;
+      File::Find::find
+        ( { wanted   => sub { my @st = lstat _;
+                              touch( $File::Find::name, $stamp, \@st );
+                            },
+            bydepth  => 1,
+            no_chdir => 1, },
+          $repo_dir );
+    }
+}
+
+
+sub parse_options
+{
+  my $help = -1;
+  local *ARGV = \@{$_[0]}; # modify our local arglist, not real ARGV.
+
+  # If there is no `--' to signal the end of options, insert one.
+  # This is to separate passthrough options from URLs and directories.
+  unless (grep( /^--$/, @ARGV))
+    {
+      for (my $i = @ARGV; $i > 0; $i--)
+        {
+          next unless $ARGV[$i-1] =~ /^-/;
+          splice( @ARGV, $i, 0, '--' );
+          last;
+        }
+    }
+
+  # Important: stringify "$_[0]", because in Getopt::Long 2.37 it's a
+  # callback object rather than just the option name.  The string
+  # representation is just the name for (semi-)backward compatibility.
+  # But $_[0]->{name} also works.
+  my $modefn = sub { $opt{mode} = "$_[0]" },
+
+  my $parser = Getopt::Long::Parser->new;
+  $parser->configure( qw(pass_through no_ignore_case no_auto_abbrev bundling) );
+  my $succ = $parser->getoptions
+    ( 'h|?|help+'        => \$help,
+      'v|verbose+'       => \$opt{verbose},
+
+      'template=s'       => \$opt{template},
+
+      'bare'             => $modefn,
+      'mirror'           => $modefn,
+      'shared'           => $modefn,
+      'no-checkout'      => $modefn,
+
+      '<>'               => sub { push @{$opt{passthru}}, "$_[0]" },
+    );
+
+  #pod2usage (-exitstatus => 1, -verbose => 0)     unless $succ;
+  #pod2usage (-exitstatus => 0, -verbose => $help) if $help >= 0;
+
+  # The option terminator `--' is normally swallowed by getopt,
+  # but not when using passthrough.
+  shift @ARGV if @ARGV && $ARGV[0] eq '--';
+
+  $opt{template} = $opt{tmpdir} = mktmpdir()
+    unless ($opt{template} || get_config_template_dir());
+
+  return $succ;
+}
+
+sub main
+{
+  parse_options( \@_ );
+
+  # Special two-arg case: url destdir-not-url
+  if (@_ == 2 && $_[1] !~ m|^[^:/]+://|)
+    {
+      git_clone( '--', @_ ) and fixup_repo( $_[1] );
+    }
+  else
+    {
+      for my $url (@_)
+        {
+          print "** $url\n" unless $opt{verbose} || @_ == 1;
+
+          (my $localdir = $url) =~ s=^.*/==;
+          $localdir .= '.git' unless $localdir =~ /\.git$/;
+          git_clone( '--', $url, $localdir ) and fixup_repo( $localdir );
+
+          print "\n" unless @_ == 1;
+        }
+    }
+  return $final_exitcode;
+}
+
+END
+{
+  rmdir( $opt{tmpdir} ) if $opt{tmpdir};
+}
+
+exit( main( @ARGV ));
 
 # eof
