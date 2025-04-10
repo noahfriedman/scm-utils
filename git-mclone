@@ -189,7 +189,7 @@ sub fixup_repo
       # but the --mirror case doesn't make sense to me.
       git( @C, qw(config unset --local remote.origin.tagOpt) )
         if $opt{mode} eq 'mirror';
-;
+
       $git_lfs //= getprog( 'git-lfs' );
       if ($git_lfs)
         {
@@ -218,7 +218,7 @@ sub fixup_repo
 sub parse_options
 {
   my $help = -1;
-  local *ARGV = \@{$_[0]}; # modify our local arglist, not real ARGV.
+  local *ARGV = $_[0]; # modify our local arglist, not real ARGV.
 
   # If there is no `--' to signal the end of options, insert one.
   # This is to separate passthrough options from URLs and directories.
@@ -230,6 +230,8 @@ sub parse_options
           splice( @ARGV, $i, 0, '--' );
           last;
         }
+      # This can happen if there were no options supplied
+      unshift( @ARGV, '--' ) unless grep( /^--$/, @ARGV );
     }
 
   # Important: stringify "$_[0]", because in Getopt::Long 2.37 it's a
