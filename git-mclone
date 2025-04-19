@@ -25,9 +25,12 @@ my %opt = ( mode      => 'recursive',
             verbose   => 0,
           );
 
-my @git_cmd = ($ENV{GITPROG} // "git");
-my $git_dir;
-my $git_lfs = undef;
+my  @git_cmd = ($ENV{GITPROG} // "git");
+my  $git_lfs = undef;
+
+# `our' declares global so they can be dynamically scoped.
+our $git_dir = undef;
+our $ignore_exit = 0;
 
 my $final_exitcode = 0;
 
@@ -65,7 +68,8 @@ sub cmd
       print STDERR "+ @xq\n";
     }
   system( { $_[0] } @_ );
-  return cmd_check_exit( $_[0] );
+  return cmd_check_exit( $_[0] ) unless $ignore_exit;
+  return $? == 0;
 }
 
 # Like `` but avoids shell exec/reparsing.
@@ -78,9 +82,9 @@ sub cmd_out
     }
   open( my $fh, "-|", @_ ) or die "exec: $_[0]: $!\n";
   local $/ = wantarray ? $/ : undef;
-  my @data = map { s/\n$//s; $_ } <$fh>;
+  my @data = map { s/\n+$//s; $_ } <$fh>;
   close( $fh ); # child will exit; perl calls waitpid implicitly
-  cmd_check_exit( $_[0] );
+  cmd_check_exit( $_[0] ) unless $ignore_exit && !@data;
   return wantarray? @data : $data[0];
 }
 
@@ -99,7 +103,7 @@ sub cmd_check_exit
     }
   else
     { $msg = sprintf( "exit %d", WEXITSTATUS( $? )) }
-  print STDERR sprintf( "%s: %s: %s\n", $progname, $_[0], $msg );
+  print STDERR sprintf( "%s: warning: %s: %s\n", $progname, $_[0], $msg );
   return 0;  # 0=failure (boolean false)
 }
 
@@ -112,8 +116,17 @@ sub xquote
 }
 
 
-sub git_out { return cmd_out( @git_cmd, @_ ) }
-sub git     { return cmd    ( @git_cmd, @_ ) }
+sub git
+{
+  my @C = ('-C', $git_dir) if defined $git_dir;
+  return cmd( @git_cmd, @C, @_ );
+}
+
+sub git_out
+{
+  my @C = ('-C', $git_dir) if defined $git_dir;
+  return cmd_out( @git_cmd, @C, @_ );
+}
 
 sub git_config_get
 {
@@ -173,12 +186,12 @@ sub touch
 sub fixup_repo
 {
   my $repo_dir = shift;
-  my @C = ('-C', $repo_dir );
+  local $git_dir = $repo_dir;
 
   if (-e "$repo_dir/.git")
     {
       my @verbose = ('--verbose') x $opt{verbose};
-      return git( @C, 'restore-commit-mtime', @verbose );
+      return git( 'restore-commit-mtime', @verbose );
     }
   else # bare repo
     {
@@ -187,20 +200,25 @@ sub fixup_repo
       # config option disabling it when fetching as well.
       # Commit 0dab2468ee5bbfaa log provides a rational for this,
       # but the --mirror case doesn't make sense to me.
-      git( @C, qw(config unset --local remote.origin.tagOpt) )
-        if $opt{mode} eq 'mirror';
+      if ($opt{mode} eq 'mirror')
+        {
+          local $ignore_exit = 1;
+          my $val = git_config_get( 'remote.origin.tagOpt', '--local' );
+          git( qw(config unset --local remote.origin.tagOpt) )
+            if $? == 0 && !$val;
+        }
 
       $git_lfs //= getprog( 'git-lfs' );
       if ($git_lfs)
         {
-          git( @C, qw(lfs fetch --all) );
-          # don't check for errors
+          git( qw(lfs fetch --all) );
+          # don't check for errors from rmdir
           rmdir( "$repo_dir/lfs/tmp" ) && rmdir( "$repo_dir/lfs" );
         }
 
       # n.b. could just use restore-commit-mtime here too,
       # but bare repos shouldn't have many files anyway.
-      my $stamp  = git_out( @C, qw(log -n1 --all --format=tformat:%ct) );
+      my $stamp  = git_out( qw(log -n1 --all --format=tformat:%ct) );
       my $pstamp = strftime( '%Y-%m-%d %H:%M:%S%Z', localtime( $stamp ));
 
       local $File::Find::dont_use_nlink = 0;
