@@ -1,0 +1,23 @@
+#!/bin/sh
+
+upstream()
+{
+    fossil remote list -R "$1"
+}
+
+main()
+{
+    for repo in "$@"; do
+        if [ $# -gt 1 ]; then
+            echo "$repo:"
+            upstream "$repo"
+            echo
+        else
+            upstream "$repo"
+        fi
+    done
+}
+
+main "$@"
+
+# eof
