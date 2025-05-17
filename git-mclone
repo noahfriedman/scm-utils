@@ -88,6 +88,10 @@ sub cmd_out
   return wantarray? @data : $data[0];
 }
 
+# POSIX :sys_wait_h does not provide WCOREDUMP.
+# Linux and FreeBSD both use WCOREFLAG=128
+sub WCOREDUMP { $_[0] & 0x80 }
+
 sub cmd_check_exit
 {
   return 1 unless $?;  # 1=success (boolean true)
