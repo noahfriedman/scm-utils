@@ -306,7 +306,8 @@ sub main
         {
           print "** $url\n" unless $opt{verbose} || @_ == 1;
 
-          (my $localdir = $url) =~ s=^.*/==;
+          (my $localdir = $url) =~ s=/+$==;
+          $localdir =~ s=^.*/==;
           $localdir .= '.git' unless $localdir =~ /\.git$/;
           git_clone( '--', $url, $localdir ) and fixup_repo( $localdir );
 
